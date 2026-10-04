@@ -113,6 +113,13 @@ partial output.
 
 ## Troubleshooting
 
+- Model and command discovery runs on the server, even when its warning is displayed on a remote
+  Mac client. Update the fork server with the installer above, restart its service, and refresh the
+  provider. The Mac app does not need reinstalling for a server-only discovery fix.
+- If OMP reports no available models, run `omp` on that server as the service user with the same
+  profile. A login or API key on your Mac is not available to OMP on the VPS. Environment variables
+  set only in an interactive shell are not automatically inherited by a systemd service; configure
+  the account in OMP's profile or the provider instance's environment.
 - If OMP is unavailable, check the executable and profile on the selected server, then refresh the
   provider. Authentication must be valid on that server and for that profile.
 - If a model is missing, verify it in OMP directly. A custom model entry does not install a model or

@@ -12,12 +12,17 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as NodeBuffer from "node:buffer";
 
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
 import { buildSelectOptionDescriptor } from "../providerSnapshot.ts";
 import { catalogFromCommandEntries, type OmpCommandCatalog } from "./OmpCommands.ts";
 
 const CATALOG_MAX_BYTES = 4 * 1024 * 1024;
+const CATALOG_RPC_MAX_BYTES = 16 * 1024 * 1024;
+const RPC_FRAME_MAX_BYTES = 1024 * 1024;
+const RPC_REASSEMBLED_MAX_BYTES = 8 * 1024 * 1024;
+const RPC_CHUNK_MAX_BYTES = 256 * 1024;
 const CATALOG_TIMEOUT_MS = 15_000;
 const CACHE_TTL_MS = 5 * 60_000;
 const MAX_WORKSPACES = 32;
@@ -48,10 +53,22 @@ const Frame = Schema.Struct({
   command: Schema.optional(Schema.String),
   success: Schema.optional(Schema.Boolean),
   data: Schema.optional(Schema.Unknown),
+  error: Schema.optional(Schema.String),
 });
+const RpcChunk = Schema.Struct({
+  type: Schema.Literal("rpc_chunk"),
+  chunkId: Schema.String,
+  index: Schema.Number,
+  count: Schema.Number,
+  byteLength: Schema.Number,
+  data: Schema.String,
+});
+const ProtocolV2 = Schema.Struct({ protocolVersion: Schema.Literal(2) });
 const JsonFrame = Schema.fromJsonString(Frame);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeFrame = Schema.decodeOption(JsonFrame);
+const decodeChunk = Schema.decodeOption(Schema.fromJsonString(RpcChunk));
+const decodeProtocolV2 = Schema.decodeUnknownOption(ProtocolV2);
 const decodeModels = Schema.decodeUnknownOption(ModelData);
 const decodeState = Schema.decodeUnknownOption(StateData);
 const decodeCommands = Schema.decodeUnknownOption(CommandData);
@@ -61,6 +78,9 @@ export class OmpDiscoveryError extends Schema.TaggedError<OmpDiscoveryError>()(
   "OmpDiscoveryError",
   {
     stage: Schema.Literals(["spawn", "timeout", "exit", "decode"]),
+    reason: Schema.optional(
+      Schema.Literals(["no-models", "catalog-too-large", "rpc-command-failed"]),
+    ),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -114,8 +134,9 @@ export const runOmpReadOnlyCommand = Effect.fn("runOmpReadOnlyCommand")(function
       ],
       { concurrency: "unbounded" },
     );
-    if (stdout.truncated || stdout.invalidUtf8)
-      return yield* new OmpDiscoveryError({ stage: "decode" });
+    if (stdout.truncated)
+      return yield* new OmpDiscoveryError({ stage: "decode", reason: "catalog-too-large" });
+    if (stdout.invalidUtf8) return yield* new OmpDiscoveryError({ stage: "decode" });
     return { stdout: stdout.text, stderr: stderr.text, code: Number(exitCode) };
   }).pipe(
     Effect.scoped,
@@ -143,12 +164,125 @@ function positiveInteger(value: number | undefined): number | undefined {
   return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
-function parseCatalog(stdout: string, checkedAt: string): OmpDiscovery | undefined {
+const readRpcFrames = Effect.fnUntraced(function* (stdout: string) {
+  const frames: Array<typeof Frame.Type> = [];
+  let protocolV2 = false;
+  let pending:
+    | {
+        readonly chunkId: string;
+        readonly count: number;
+        readonly byteLength: number;
+        readonly chunks: Array<Buffer>;
+        receivedBytes: number;
+      }
+    | undefined;
+  for (const rawLine of stdout.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (line === "") continue;
+    if (
+      Buffer.byteLength(line) + 1 >
+      (protocolV2 ? RPC_FRAME_MAX_BYTES : RPC_REASSEMBLED_MAX_BYTES)
+    )
+      return yield* new OmpDiscoveryError({ stage: "decode", reason: "catalog-too-large" });
+    const parsed = decodeFrame(line);
+    if (Option.isNone(parsed)) {
+      if (pending) return yield* new OmpDiscoveryError({ stage: "decode" });
+      continue;
+    }
+    let frame = parsed.value;
+    if (frame.type === "rpc_chunk") {
+      const decoded = decodeChunk(line);
+      if (!protocolV2 || Option.isNone(decoded))
+        return yield* new OmpDiscoveryError({ stage: "decode" });
+      const chunk = decoded.value;
+      if (chunk.byteLength > RPC_REASSEMBLED_MAX_BYTES)
+        return yield* new OmpDiscoveryError({ stage: "decode", reason: "catalog-too-large" });
+      if (
+        !chunk.chunkId ||
+        chunk.chunkId.length > 128 ||
+        !Number.isSafeInteger(chunk.index) ||
+        !Number.isSafeInteger(chunk.count) ||
+        !Number.isSafeInteger(chunk.byteLength) ||
+        chunk.byteLength < RPC_FRAME_MAX_BYTES ||
+        chunk.count !== Math.ceil(chunk.byteLength / RPC_CHUNK_MAX_BYTES) ||
+        chunk.index < 0 ||
+        chunk.index >= chunk.count ||
+        !chunk.data ||
+        chunk.data.length > 4 * Math.ceil(RPC_CHUNK_MAX_BYTES / 3) ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(chunk.data)
+      )
+        return yield* new OmpDiscoveryError({ stage: "decode" });
+      const bytes = Buffer.from(chunk.data, "base64");
+      if (bytes.toString("base64") !== chunk.data || bytes.length > RPC_CHUNK_MAX_BYTES)
+        return yield* new OmpDiscoveryError({ stage: "decode" });
+      if (!pending) {
+        if (chunk.index !== 0) return yield* new OmpDiscoveryError({ stage: "decode" });
+        pending = {
+          chunkId: chunk.chunkId,
+          count: chunk.count,
+          byteLength: chunk.byteLength,
+          chunks: [],
+          receivedBytes: 0,
+        };
+      }
+      if (
+        chunk.chunkId !== pending.chunkId ||
+        chunk.count !== pending.count ||
+        chunk.byteLength !== pending.byteLength ||
+        chunk.index !== pending.chunks.length
+      )
+        return yield* new OmpDiscoveryError({ stage: "decode" });
+      pending.chunks.push(bytes);
+      pending.receivedBytes += bytes.length;
+      if (pending.receivedBytes > pending.byteLength)
+        return yield* new OmpDiscoveryError({ stage: "decode" });
+      if (pending.chunks.length !== pending.count) continue;
+      const complete = Buffer.concat(pending.chunks, pending.receivedBytes);
+      if (complete.length !== pending.byteLength || !NodeBuffer.isUtf8(complete))
+        return yield* new OmpDiscoveryError({ stage: "decode" });
+      const reassembled = decodeFrame(complete.toString("utf8"));
+      if (Option.isNone(reassembled) || reassembled.value.type === "rpc_chunk")
+        return yield* new OmpDiscoveryError({ stage: "decode" });
+      frame = reassembled.value;
+      pending = undefined;
+    } else if (pending) {
+      return yield* new OmpDiscoveryError({ stage: "decode" });
+    }
+    if (
+      frame.type === "response" &&
+      frame.id === "negotiate_protocol" &&
+      frame.command === "negotiate_protocol" &&
+      frame.success === true &&
+      Option.isSome(decodeProtocolV2(frame.data))
+    )
+      protocolV2 = true;
+    if (
+      frame.type === "response" &&
+      frame.id === frame.command &&
+      ["get_state", "get_available_models", "get_available_commands"].includes(
+        frame.command ?? "",
+      ) &&
+      frame.success === false
+    )
+      return yield* new OmpDiscoveryError({
+        stage: "decode",
+        reason:
+          frame.error === "RPC response exceeded the transport limit"
+            ? "catalog-too-large"
+            : "rpc-command-failed",
+      });
+    frames.push(frame);
+  }
+  if (pending) return yield* new OmpDiscoveryError({ stage: "decode" });
+  return frames;
+});
+
+function parseCatalog(
+  frames: ReadonlyArray<typeof Frame.Type>,
+  checkedAt: string,
+): OmpDiscovery | undefined {
   const responses = new Map<string, unknown>();
-  for (const line of stdout.split("\n")) {
-    const frame = decodeFrame(line.replace(/\r$/, ""));
-    if (Option.isNone(frame)) continue;
-    const value = frame.value;
+  for (const value of frames) {
     if (
       value.type === "response" &&
       value.success === true &&
@@ -226,8 +360,8 @@ function parseCatalog(stdout: string, checkedAt: string): OmpDiscovery | undefin
 
 /**
  * No prompt, authentication request, MCP injection, or persisted session is created.
- * OMP 18.6 defaults to RPC v1 (plain JSONL); we deliberately do not negotiate
- * v2, whose oversized frames require chunk reassembly. Output remains bounded.
+ * RPC v1 rejects responses over 1 MiB. Negotiate v2 for bounded chunk reassembly;
+ * older OMP versions that reject negotiation can still return plain JSONL.
  */
 export const discoverOmpCatalog = Effect.fn("discoverOmpCatalog")(function* (
   settings: OmpSettings,
@@ -248,10 +382,21 @@ export const discoverOmpCatalog = Effect.fn("discoverOmpCatalog")(function* (
       "--no-ui",
       "--approval-mode=always-ask",
     ],
-    { cwd, stdin: requests.map((type) => `${encodeJson({ id: type, type })}\n`).join("") },
+    {
+      cwd,
+      maxBytes: CATALOG_RPC_MAX_BYTES,
+      stdin:
+        `${encodeJson({ id: "negotiate_protocol", type: "negotiate_protocol", protocolVersion: 2 })}\n` +
+        requests.map((type) => `${encodeJson({ id: type, type })}\n`).join(""),
+    },
   );
-  if (result.code !== 0) return yield* new OmpDiscoveryError({ stage: "exit" });
-  const catalog = parseCatalog(result.stdout, DateTime.formatIso(yield* DateTime.now));
+  if (result.code !== 0)
+    return yield* new OmpDiscoveryError({
+      stage: "exit",
+      ...(/^No models available\./m.test(result.stderr) ? { reason: "no-models" as const } : {}),
+    });
+  const frames = yield* readRpcFrames(result.stdout);
+  const catalog = parseCatalog(frames, DateTime.formatIso(yield* DateTime.now));
   if (!catalog) return yield* new OmpDiscoveryError({ stage: "decode" });
   return catalog;
 });

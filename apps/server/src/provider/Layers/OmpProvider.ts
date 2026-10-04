@@ -29,6 +29,28 @@ import {
 } from "../providerMaintenance.ts";
 
 const DRIVER = ProviderDriverKind.make("omp");
+const NO_MODELS_MESSAGE =
+  "Oh My Pi reports no available models. Run omp on the server as the service user, with this instance's profile, to configure an upstream account or API key.";
+const DISCOVERY_FALLBACK = "The live ACP session will negotiate its own capabilities.";
+
+function discoveryFailureMessage(error: OmpDiscoveryError): string {
+  if (error.reason === "no-models") return NO_MODELS_MESSAGE;
+  if (error.reason === "catalog-too-large")
+    return `Oh My Pi's model/command catalog exceeded a transport or safety limit. Update OMP or reduce this profile's custom model/command catalog, then refresh. ${DISCOVERY_FALLBACK}`;
+  if (error.reason === "rpc-command-failed")
+    return `Oh My Pi rejected a model/command discovery request. Check this profile in omp on the server and update OMP if necessary. ${DISCOVERY_FALLBACK}`;
+  switch (error.stage) {
+    case "timeout":
+      return `Oh My Pi model/command discovery timed out. Check the server's network and this profile's startup/extensions, then refresh. ${DISCOVERY_FALLBACK}`;
+    case "exit":
+      return `Oh My Pi exited before model/command discovery completed. Run omp on the server as the service user, with this instance's profile, to check its configuration. ${DISCOVERY_FALLBACK}`;
+    case "spawn":
+      return `Oh My Pi could not start its model/command probe. Check the executable, server environment and workspace permissions. ${DISCOVERY_FALLBACK}`;
+    case "decode":
+      return `Oh My Pi model/command discovery failed: the RPC catalog was invalid or incomplete. Update OMP and refresh the provider. ${DISCOVERY_FALLBACK}`;
+  }
+}
+
 const PRESENTATION = {
   displayName: "Oh My Pi",
   showInteractionModeToggle: true,
@@ -162,9 +184,9 @@ export const checkOmpProviderStatus = Effect.fn("checkOmpProviderStatus")(functi
       ...(catalog && catalog.models.length > 0
         ? {}
         : {
-            message: catalog
-              ? "Oh My Pi reports no available models. Run omp in a terminal to configure an upstream account or API key for this profile."
-              : "Oh My Pi is installed, but model and command discovery failed. Check the instance profile and environment; the live ACP session will negotiate its own capabilities.",
+            message: Result.isFailure(discovery)
+              ? discoveryFailureMessage(discovery.failure)
+              : NO_MODELS_MESSAGE,
           }),
     },
     catalog,
