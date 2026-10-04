@@ -19,7 +19,8 @@ bash install-t3-omp.sh --systemd
 It builds the fork with the production public Connect configuration and installs a separate
 `~/.local/bin/t3-omp` launcher. It leaves stock `t3` and `~/.t3` untouched; the fork uses
 `~/.t3-omp`. To deliberately reuse another T3 home, set `T3CODE_FORK_HOME` before installation.
-Do not run two servers against the same home.
+Do not run two servers against the same home. The fork listens on port 3774 instead of stock
+T3's 3773; override it with `T3CODE_FORK_PORT` or an explicit `--port`.
 
 Authorize the VPS using your usual T3 Connect account, then start the fork service:
 

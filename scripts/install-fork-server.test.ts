@@ -29,7 +29,7 @@ async function withFixture(test: (env: NodeJS.ProcessEnv, root: string) => Promi
     );
     await NodeFSP.writeFile(
       NodePath.join(fixture, "bin.mjs"),
-      "// pk_live_fixture fixture-oauth https://relay.example.com\nconsole.log(JSON.stringify({args:process.argv.slice(2),home:process.env.T3CODE_HOME}));\n",
+      "// pk_live_fixture fixture-oauth https://relay.example.com\nconsole.log(JSON.stringify({args:process.argv.slice(2),home:process.env.T3CODE_HOME,port:process.env.T3CODE_PORT}));\n",
     );
     const commands: Record<string, string> = {
       uname:
@@ -122,6 +122,7 @@ describe("fork server installer", () => {
       expect(JSON.parse(invocation.stdout)).toEqual({
         args: ["serve", "--host", "value with spaces"],
         home: env.T3CODE_FORK_HOME,
+        port: "3774",
       });
       const defaultEnv = { ...env };
       delete defaultEnv.T3CODE_FORK_HOME;
@@ -150,6 +151,7 @@ describe("fork server installer", () => {
       expect(unit).toContain("t3-omp");
       expect(unit).toContain("$$dollars");
       expect(unit).toContain("KillMode=mixed");
+      expect(unit).toContain("WorkingDirectory=%h");
       expect(result.stdout).toContain("connect link --headless");
       expect(run("bash", [installer, "--systemd"], env).status).toBe(0);
     }));

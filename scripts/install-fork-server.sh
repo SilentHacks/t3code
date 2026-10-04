@@ -23,6 +23,7 @@ Overrides:
   T3CODE_FORK_INSTALL_DIR  Source/build storage (default: ~/.local/share/t3-omp)
   T3CODE_FORK_BIN_DIR      Launcher directory (default: ~/.local/bin)
   T3CODE_FORK_HOME         Fork state (default: ~/.t3-omp)
+  T3CODE_FORK_PORT         Fork listener (default: 3774; stock T3 uses 3773)
 EOF
 }
 
@@ -142,6 +143,7 @@ pathlib.Path(target).write_text(f'''#!/usr/bin/env bash
 set -euo pipefail
 default_home={q(data)}
 export T3CODE_HOME="${{T3CODE_FORK_HOME:-$default_home}}"
+export T3CODE_PORT="${{T3CODE_FORK_PORT:-3774}}"
 export PATH={q(str(pathlib.Path(node).parent))}:"$HOME/.local/bin:$HOME/.bun/bin:${{PATH:-/usr/local/bin:/usr/bin:/bin}}"
 case "${{1:-}}" in
   update|service)
@@ -167,6 +169,7 @@ Description=T3 Code OMP fork (T3 Connect)
 After=network-online.target
 
 [Service]
+WorkingDirectory=%h
 ExecStart="{exec_start}" serve
 Restart=on-failure
 RestartSec=5
