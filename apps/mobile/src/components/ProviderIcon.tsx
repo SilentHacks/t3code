@@ -1,8 +1,8 @@
 import { Image } from "expo-image";
-import { Path, Svg } from "react-native-svg";
+import { Defs, LinearGradient, Path, Rect, Stop, Svg } from "react-native-svg";
 import { View } from "react-native";
 import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { resolveOfficialAcpRegistryIconUrl } from "@t3tools/contracts";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { AppText as Text } from "./AppText";
@@ -67,6 +67,23 @@ export function ProviderIcon(props: ProviderIconProps) {
   const isDarkMode = themeAppearance === "dark";
   const size = props.size ?? 16;
   const mono = isDarkMode ? "#e5e5e5" : "#171717";
+  const gradientId = useId();
+
+  if (props.provider === "omp") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 64 64">
+        <Defs>
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#ed4abf" />
+            <Stop offset=".5" stopColor="#9b4dff" />
+            <Stop offset="1" stopColor="#5ad8e6" />
+          </LinearGradient>
+        </Defs>
+        <Rect width="64" height="64" rx="12" fill="#0f0a14" />
+        <Path fill={`url(#${gradientId})`} d="M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z" />
+      </Svg>
+    );
+  }
 
   if (props.provider?.trim().toLowerCase() === "antigravity") {
     return (

@@ -1,4 +1,4 @@
-import type { UserInputQuestion } from "@t3tools/contracts";
+import type { OrchestrationV2UserInputQuestion as UserInputQuestion } from "@t3tools/contracts";
 
 export interface PendingUserInputDraftAnswer {
   selectedOptionValues?: string[];
@@ -138,9 +138,14 @@ export function buildPendingUserInputAnswers(
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
     if (answer === null) {
+      if (question.required === false && !draftAnswers[question.id]?.attachmentsBlocked) continue;
       return null;
     }
-    answers[question.id] = answer;
+    Object.defineProperty(answers, question.id, {
+      value: answer,
+      enumerable: true,
+      configurable: true,
+    });
   }
 
   return answers;
@@ -151,7 +156,8 @@ export function countAnsweredPendingUserInputQuestions(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   return questions.reduce((count, question) => {
-    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) !== null
+    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) !== null ||
+      (question.required === false && !draftAnswers[question.id]?.attachmentsBlocked)
       ? count + 1
       : count;
   }, 0);
@@ -162,7 +168,9 @@ export function findFirstUnansweredPendingUserInputQuestionIndex(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   const unansweredIndex = questions.findIndex(
-    (question) => !resolvePendingUserInputAnswer(question, draftAnswers[question.id]),
+    (question) =>
+      resolvePendingUserInputAnswer(question, draftAnswers[question.id]) === null &&
+      (question.required !== false || draftAnswers[question.id]?.attachmentsBlocked),
   );
 
   return unansweredIndex === -1 ? Math.max(questions.length - 1, 0) : unansweredIndex;
@@ -197,6 +205,8 @@ export function derivePendingUserInputProgress(
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: resolvedAnswer !== null,
+    canAdvance:
+      resolvedAnswer !== null ||
+      (activeQuestion?.required === false && !activeDraft?.attachmentsBlocked),
   };
 }

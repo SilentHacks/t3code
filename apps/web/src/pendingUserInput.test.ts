@@ -220,6 +220,79 @@ describe("buildPendingUserInputAnswers", () => {
   });
 });
 
+describe("optional ACP questions", () => {
+  const optionalOther = {
+    id: "q0__other",
+    header: "Other",
+    question: "Other",
+    options: [],
+    required: false,
+  } as const;
+  const optionalMulti = {
+    ...multiSelectQuestion,
+    required: false,
+    allowCustomAnswer: false,
+  } as const;
+
+  it("omits blank optional text and multi-select answers without weakening legacy requirements", () => {
+    const questions = [singleSelectQuestion, optionalOther, optionalMulti];
+    expect(buildPendingUserInputAnswers(questions, {})).toBeNull();
+    const drafts = {
+      scope: { selectedOptionValues: ["Orchestration-first"] },
+      q0__other: { customAnswer: "   " },
+    };
+    expect(buildPendingUserInputAnswers(questions, drafts)).toEqual({
+      scope: "Orchestration-first",
+    });
+    expect(countAnsweredPendingUserInputQuestions(questions, drafts)).toBe(3);
+    expect(derivePendingUserInputProgress(questions, drafts, 1)).toMatchObject({
+      resolvedAnswer: null,
+      canAdvance: true,
+      isComplete: true,
+    });
+    expect(derivePendingUserInputProgress(questions, drafts, 2)).toMatchObject({
+      canAdvance: true,
+      isComplete: true,
+    });
+    expect(
+      findFirstUnansweredPendingUserInputQuestionIndex([optionalOther, singleSelectQuestion], {}),
+    ).toBe(1);
+  });
+
+  it("still includes answered optional questions and the exact native multi-select values", () => {
+    expect(
+      buildPendingUserInputAnswers([optionalOther, optionalMulti], {
+        q0__other: { customAnswer: "Custom answer" },
+        areas: { selectedOptionValues: ["Server", "Web"] },
+      }),
+    ).toEqual({ q0__other: "Custom answer", areas: ["Server", "Web"] });
+    const draft = togglePendingUserInputOptionSelection(optionalMulti, undefined, "Server");
+    const cleared = togglePendingUserInputOptionSelection(optionalMulti, draft, "Server");
+    expect(buildPendingUserInputAnswers([optionalMulti], { areas: cleared })).toEqual({});
+  });
+
+  it("does not silently skip an optional answer with blocked attachments", () => {
+    const drafts = { q0__other: { attachmentsBlocked: true, attachmentCount: 1 } };
+    expect(buildPendingUserInputAnswers([optionalOther], drafts)).toBeNull();
+    expect(derivePendingUserInputProgress([optionalOther], drafts, 0)).toMatchObject({
+      canAdvance: false,
+      isComplete: false,
+      answeredQuestionCount: 0,
+    });
+  });
+
+  it("treats a provider's empty option value as an answer during navigation", () => {
+    const question = {
+      ...nativeChoiceQuestion,
+      options: [{ value: "", label: "Empty", description: "Explicit empty answer" }],
+    };
+    const drafts = { result: { selectedOptionValues: [""] } };
+    expect(
+      findFirstUnansweredPendingUserInputQuestionIndex([question, singleSelectQuestion], drafts),
+    ).toBe(1);
+  });
+});
+
 describe("pending user input question progress", () => {
   const questions = [
     singleSelectQuestion,

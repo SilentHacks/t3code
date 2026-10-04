@@ -17,6 +17,7 @@ import * as NodeOS from "node:os";
 import {
   ClaudeSettings,
   CodexSettings,
+  OmpSettings,
   type ProviderInstanceConfig,
   ProviderInstanceId,
   USAGE_CONTRACT_VERSION,
@@ -47,6 +48,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { resolveOmpSessionsDirectory } from "../project/OmpSessionLayout.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { resolveAntigravityInstanceDirectories } from "../provider/antigravityAuthSupport.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
@@ -96,6 +98,7 @@ const TRANSCRIPT_READ_CONCURRENCY = 4;
 
 const decodeCodexSettings = Schema.decodeOption(CodexSettings);
 const decodeClaudeSettings = Schema.decodeOption(ClaudeSettings);
+const decodeOmpSettings = Schema.decodeOption(OmpSettings);
 
 /** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
@@ -303,7 +306,7 @@ export const make = Effect.gen(function* () {
       fileName?: string;
     }> = [];
     const seen = new Set<string>();
-    for (const driver of ["claudeAgent", "codex", "grok"] as const) {
+    for (const driver of ["claudeAgent", "codex", "grok", "omp"] as const) {
       // Disabled accounts still have history. Explicit default slots replace
       // the legacy settings, just as they do in the provider registry.
       const instances: Array<
@@ -321,33 +324,50 @@ export const make = Effect.gen(function* () {
         const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
         const provider = driver === "claudeAgent" ? "claude" : driver;
         let home: string;
-        if (driver === "codex") {
-          const decoded = decodeCodexSettings(instance.config ?? {});
+        let directory: string;
+        if (driver === "omp") {
+          const decoded = decodeOmpSettings(instance.config ?? {});
           if (Option.isNone(decoded)) continue;
-          const codexConfig = decoded.value;
-          const environmentHome = environment.CODEX_HOME?.trim();
-          const layout = yield* resolveCodexHomeLayout(
-            codexConfig.setupMode !== "managed" &&
-              !codexConfig.homePath.trim() &&
-              !codexConfig.shadowHomePath.trim() &&
-              environmentHome
-              ? { ...codexConfig, homePath: environmentHome }
-              : codexConfig,
+          const sessions = yield* resolveOmpSessionsDirectory({
+            settings: decoded.value,
+            environment,
+            platform,
+            homeDirectory: NodeOS.homedir(),
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
           );
-          home = layout.sharedHomePath;
-        } else if (driver === "claudeAgent") {
-          const decoded = decodeClaudeSettings(instance.config ?? {});
-          if (Option.isNone(decoded)) continue;
-          const configured = decoded.value.homePath.trim();
-          home = configured
-            ? expandHomePath(configured)
-            : environment.CLAUDE_CONFIG_DIR?.trim() || path.join(NodeOS.homedir(), ".claude");
+          if (sessions === null) continue;
+          directory = path.resolve(sessions);
         } else {
-          home = expandHomePath(
-            environment.GROK_HOME?.trim() || path.join(NodeOS.homedir(), ".grok"),
-          );
+          if (driver === "codex") {
+            const decoded = decodeCodexSettings(instance.config ?? {});
+            if (Option.isNone(decoded)) continue;
+            const codexConfig = decoded.value;
+            const environmentHome = environment.CODEX_HOME?.trim();
+            const layout = yield* resolveCodexHomeLayout(
+              codexConfig.setupMode !== "managed" &&
+                !codexConfig.homePath.trim() &&
+                !codexConfig.shadowHomePath.trim() &&
+                environmentHome
+                ? { ...codexConfig, homePath: environmentHome }
+                : codexConfig,
+            );
+            home = layout.sharedHomePath;
+          } else if (driver === "claudeAgent") {
+            const decoded = decodeClaudeSettings(instance.config ?? {});
+            if (Option.isNone(decoded)) continue;
+            const configured = decoded.value.homePath.trim();
+            home = configured
+              ? expandHomePath(configured)
+              : environment.CLAUDE_CONFIG_DIR?.trim() || path.join(NodeOS.homedir(), ".claude");
+          } else {
+            home = expandHomePath(
+              environment.GROK_HOME?.trim() || path.join(NodeOS.homedir(), ".grok"),
+            );
+          }
+          directory = path.resolve(home, provider === "claude" ? "projects" : "sessions");
         }
-        const directory = path.resolve(home, provider === "claude" ? "projects" : "sessions");
         const sourceKey = provider + "\0" + directory;
         const previous = sourceCache.get(sourceKey);
         // Keep canonical paths and source fingerprints stable after root cleanup,

@@ -1987,6 +1987,53 @@ describe("pending user input answers", () => {
   });
 });
 
+describe("optional ACP answers on mobile", () => {
+  const optionalOther = {
+    id: "q0__other",
+    header: "Other",
+    question: "Other",
+    options: [],
+    multiSelect: false,
+    required: false,
+  } as const;
+  const optionalMulti = {
+    ...multiSelectQuestion,
+    required: false,
+    allowCustomAnswer: false,
+  } as const;
+
+  it("omits blank optional text and multi-select while preserving legacy required answers", () => {
+    const questions = [singleSelectQuestion, optionalOther, optionalMulti];
+    expect(buildPendingUserInputAnswers(questions, {})).toBeNull();
+    expect(
+      buildPendingUserInputAnswers(questions, {
+        runtime: { selectedOptionValues: ["Go"] },
+        q0__other: { customAnswer: "   " },
+      }),
+    ).toEqual({ runtime: "Go" });
+  });
+
+  it("includes provided optional text and multi-select answers and allows clearing the last selection", () => {
+    expect(
+      buildPendingUserInputAnswers([optionalOther, optionalMulti], {
+        q0__other: { customAnswer: "Custom target" },
+        scope: { selectedOptionValues: ["Orders", "Listings"] },
+      }),
+    ).toEqual({ q0__other: "Custom target", scope: ["Orders", "Listings"] });
+    const draft = togglePendingUserInputOptionSelection(optionalMulti, undefined, "Orders");
+    const cleared = togglePendingUserInputOptionSelection(optionalMulti, draft, "Orders");
+    expect(buildPendingUserInputAnswers([optionalMulti], { scope: cleared })).toEqual({});
+  });
+
+  it("does not discard blocked optional attachments", () => {
+    expect(
+      buildPendingUserInputAnswers([optionalOther], {
+        q0__other: { attachmentsBlocked: true, attachmentCount: 1 },
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("provider question values", () => {
   const question = {
     ...singleSelectQuestion,

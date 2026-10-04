@@ -92,6 +92,7 @@ describe("buildPeriodColumns", () => {
       { provider: "cursor", value: 0 },
       { provider: "opencode", value: 0 },
       { provider: "antigravity", value: 0 },
+      { provider: "omp", value: 0 },
     ]);
   });
 
@@ -104,6 +105,11 @@ describe("buildPeriodColumns", () => {
 });
 
 describe("providersWithUsage", () => {
+  it("includes OMP token activity even when the native model reports zero cost", () => {
+    expect(providersWithUsage([{ provider: "omp", costUsd: 0, totalTokens: 175 }])).toEqual([
+      "omp",
+    ]);
+  });
   it("omits providers with no cost or tokens", () => {
     expect(
       providersWithUsage([

@@ -352,6 +352,11 @@ describe("instance-scoped model selection", () => {
       availableModel: "gemini-3.1-pro",
       missingModel: "gemini-3.1-pro-high",
     },
+    {
+      driverName: "omp",
+      availableModel: "Provider/Native.ID",
+      missingModel: "OtherProvider/Case:Sensitive.Model",
+    },
   ])("$driverName catalog gaps", ({ driverName, availableModel, missingModel }) => {
     it("preserves a selected model when a catalog refresh no longer contains it", () => {
       const providers = [
@@ -482,6 +487,31 @@ describe("instance-scoped model selection", () => {
         }),
       ).toBeNull();
     });
+  });
+
+  it("keeps OMP default local rather than showing it as an unavailable native model", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("omp"),
+        instanceId: "omp",
+        models: ["Provider/Native.ID"],
+      }),
+    ];
+    const entry = deriveProviderInstanceEntries(providers)[0]!;
+    expect(
+      getAppModelOptionsForInstance(settingsWithProviderInstances(), entry, "default").map(
+        (option) => option.slug,
+      ),
+    ).toEqual(["Provider/Native.ID"]);
+    expect(
+      resolveAppModelSelectionForInstance(
+        entry.instanceId,
+        settingsWithProviderInstances(),
+        providers,
+        "default",
+        { preserveUnavailableSelection: true },
+      ),
+    ).toBe("Provider/Native.ID");
   });
 
   it("does not add unavailable options for other providers", () => {

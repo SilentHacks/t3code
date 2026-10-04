@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import type * as V2 from "./_generated/schema.gen.ts";
+import * as V2 from "./_generated/schema.gen.ts";
 
 type Meta = AcpMeta | null;
 type AcpMeta = NonNullable<V2.InitializeRequest["_meta"]>;
@@ -43,7 +43,32 @@ export type MessageMcpResponse = V2.MessageMcpResponse;
 export type DisconnectMcpRequest = V2.DisconnectMcpRequest;
 export type DisconnectMcpResponse = V2.DisconnectMcpResponse;
 export type CompleteElicitationNotification = V2.CompleteElicitationNotification;
-export type CreateElicitationRequest = V2.CreateElicitationRequest;
+// JSON Schema is data here, not a closed union of ACP's example field types.
+// Preserve constraints and titled choices for the client's form validator.
+const ElicitationRequestedSchema = Schema.StructWithRest(
+  Schema.Struct({
+    type: Schema.optionalKey(Schema.Literal("object")),
+    properties: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+    required: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+  }),
+  [Schema.Record(Schema.String, Schema.Json)],
+);
+const ElicitationFormFields = {
+  message: Schema.String,
+  mode: Schema.Literal("form"),
+  requestedSchema: ElicitationRequestedSchema,
+  _meta: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.Json))),
+};
+export const CreateElicitationRequest = Schema.Union([
+  Schema.Struct({
+    ...ElicitationFormFields,
+    sessionId: Schema.String,
+    toolCallId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  }),
+  Schema.Struct({ ...ElicitationFormFields, requestId: V2.RequestId }),
+  V2.CreateElicitationRequest,
+]);
+export type CreateElicitationRequest = typeof CreateElicitationRequest.Type;
 export type CreateElicitationResponse = V2.CreateElicitationResponse;
 export type ElicitationContentValue = V2.ElicitationContentValue;
 export type ForkSessionRequest = Omit<V2.ForkSessionRequest, "mcpServers"> & {

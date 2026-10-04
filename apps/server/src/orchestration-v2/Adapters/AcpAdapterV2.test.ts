@@ -3762,6 +3762,217 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.live.each([
+    { method: "elicitation/create", supported: true },
+    { method: "session/elicitation", supported: true },
+    { method: "_session/elicitation", supported: true },
+    { method: "elicitation/create", supported: false },
+    { method: "session/elicitation", supported: false },
+    { method: "_session/elicitation", supported: false },
+  ])(
+    "validates rich ACP forms and safely declines unsupported forms over $method ($supported)",
+    ({ method, supported }) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fileSystem.makeTempDirectoryScoped();
+        const mockAgentPath = path.join(directory, "rich-form-agent.mjs");
+        const properties = supported
+          ? {
+              confirmed: { type: "boolean" },
+              target: {
+                type: "string",
+                oneOf: [{ const: "native/one", title: "One", description: "First target" }],
+              },
+              features: {
+                type: "array",
+                minItems: 1,
+                items: {
+                  anyOf: [
+                    { const: "diff", title: "Diff" },
+                    { const: "tools", title: "Tools" },
+                  ],
+                },
+              },
+              q0__other: { type: "string", title: "Other" },
+            }
+          : { nested: { type: "object" } };
+        const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+        const methodJson = yield* encodeJson(method);
+        const propertiesJson = yield* encodeJson(properties);
+        const requiredJson = yield* encodeJson(
+          supported ? ["confirmed", "target", "features"] : [],
+        );
+        yield* fileSystem.writeFileString(
+          mockAgentPath,
+          `
+import { createInterface } from "node:readline";
+const write = (value) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...value }) + "\\n");
+let promptId;
+for await (const line of createInterface({ input: process.stdin })) {
+  const request = JSON.parse(line);
+  if (request.method === "initialize") write({ id: request.id, result: { protocolVersion: 2, info: { name: "rich-form-test", version: "1" } } });
+  else if (request.method === "session/new") write({ id: request.id, result: { sessionId: "rich-form-session" } });
+  else if (request.method === "session/prompt") {
+    promptId = request.id;
+    write({ id: "rich-form-request", method: ${methodJson}, params: { sessionId: "rich-form-session", mode: "form", message: "Choose features", requestedSchema: { type: "object", properties: ${propertiesJson}, required: ${requiredJson} } } });
+  } else if (request.id === "rich-form-request") {
+    write({ method: "session/update", params: { sessionId: "rich-form-session", update: { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" } } });
+    write({ id: promptId, result: {} });
+  } else if (request.id !== undefined) write({ id: request.id, result: {} });
+}
+`,
+        );
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const instanceId = ProviderInstanceId.make("acp-rich-form-test");
+        const adapter = makeAcpAdapterV2({
+          crypto: yield* Crypto.Crypto,
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            resolveModelId: () => undefined,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+              mockAgentPath,
+              protocolEvents,
+            }),
+          },
+          fileSystem,
+          idAllocator: yield* IdAllocator.IdAllocatorV2,
+          serverConfig: yield* ServerConfig.ServerConfig,
+          selfInvocation: yield* resolveSelfInvocation(),
+        });
+        const threadId = ThreadId.make("thread-acp-rich-form-test");
+        const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("session-acp-rich-form-test"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        const eventStream = Stream.fromEffect(Queue.take(events)).pipe(Stream.forever);
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        if (supported) {
+          const pending = Option.getOrThrow(
+            yield* eventStream.pipe(
+              Stream.filter(
+                (event) =>
+                  (event.type === "runtime_request.updated" &&
+                    event.runtimeRequest.status === "pending") ||
+                  event.type === "turn.terminal",
+              ),
+              Stream.runHead,
+            ),
+          );
+          if (pending.type !== "runtime_request.updated")
+            return yield* Effect.die("Missing rich-form request");
+          const questionItem = Option.getOrThrow(
+            yield* eventStream.pipe(
+              Stream.filter(
+                (event) =>
+                  event.type === "turn_item.updated" &&
+                  event.turnItem.type === "user_input_request",
+              ),
+              Stream.runHead,
+            ),
+          );
+          if (
+            questionItem.type !== "turn_item.updated" ||
+            questionItem.turnItem.type !== "user_input_request"
+          )
+            return yield* Effect.die("Missing questions");
+          assert.equal(questionItem.turnItem.questions[2]?.multiSelect, true);
+          assert.equal(questionItem.turnItem.questions[3]?.required, false);
+          yield* runtime.respondToRuntimeRequest({
+            requestId: pending.runtimeRequest.id,
+            answers: { confirmed: "true", target: "not-allowed", features: ["diff"] },
+          });
+          const reopened = Option.getOrThrow(
+            yield* eventStream.pipe(
+              Stream.filter((event) => event.type === "runtime_request.updated"),
+              Stream.runHead,
+            ),
+          );
+          assert.deepEqual(reopened, pending);
+          const retryItem = Option.getOrThrow(
+            yield* eventStream.pipe(
+              Stream.filter((event) => event.type === "turn_item.updated"),
+              Stream.runHead,
+            ),
+          );
+          assert.isTrue(
+            retryItem.type === "turn_item.updated" &&
+              retryItem.turnItem.type === "user_input_request" &&
+              retryItem.turnItem.questions[1]!.question.includes("does not satisfy"),
+          );
+          // The same live and durable request remains actionable after the effect succeeds.
+          yield* runtime.respondToRuntimeRequest({
+            requestId: pending.runtimeRequest.id,
+            answers: {
+              confirmed: ["false"],
+              target: "native/one",
+              features: ["diff", "tools"],
+              q0__other: "",
+              unknown: "ignored",
+            },
+          });
+        }
+        const terminalEvents = yield* eventStream.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        if (!supported)
+          assert.isFalse(terminalEvents.some((event) => event.type === "runtime_request.updated"));
+        const decodeResponse = Schema.decodeUnknownOption(
+          Schema.fromJsonString(Schema.Struct({ id: Schema.String, result: Schema.Unknown })),
+        );
+        const response = Option.getOrThrow(
+          yield* Stream.fromQueue(protocolEvents).pipe(
+            Stream.filter((event) => event.direction === "outgoing" && event.stage === "raw"),
+            Stream.map((event) => decodeResponse(event.payload)),
+            Stream.filter(Option.isSome),
+            Stream.map((value) => value.value),
+            Stream.filter((value) => value.id === "rich-form-request"),
+            Stream.runHead,
+          ),
+        );
+        const answer = supported
+          ? {
+              action: "accept",
+              content: { confirmed: false, target: "native/one", features: ["diff", "tools"] },
+            }
+          : { action: "decline" };
+        assert.deepEqual(
+          response.result,
+          method === "elicitation/create" ? answer : { action: answer },
+        );
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("auto-approves tagged MCP elicitations under full-access policy", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

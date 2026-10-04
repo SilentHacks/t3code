@@ -39,7 +39,55 @@ import {
   OrchestrationV2ThreadShell,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
+  OrchestrationV2UserInputQuestion,
 } from "./orchestrationV2.ts";
+
+describe("OrchestrationV2UserInputQuestion rich ACP forms", () => {
+  const decodeQuestion = Schema.decodeUnknownSync(OrchestrationV2UserInputQuestion);
+  const encodeQuestion = Schema.encodeSync(OrchestrationV2UserInputQuestion);
+
+  it("preserves opaque choice values and optional multi-select/custom-answer flags", () => {
+    const input = {
+      id: "targets",
+      header: "Targets",
+      question: "Which targets should be tested?",
+      options: [
+        { label: "Web client", description: "Browser", value: "web:preview" },
+        { label: "Mobile client", description: "Native app", value: "mobile/native" },
+      ],
+      multiSelect: true,
+      allowCustomAnswer: true,
+      required: false,
+    };
+    expect(encodeQuestion(decodeQuestion(input))).toEqual(input);
+  });
+
+  it("preserves required confirmations with string wire values, not display labels", () => {
+    const input = {
+      id: "confirm",
+      header: "Confirm",
+      question: "Proceed?",
+      options: [
+        { label: "Yes", description: "Proceed", value: "true" },
+        { label: "No", description: "Cancel", value: "false" },
+      ],
+      multiSelect: false,
+      allowCustomAnswer: false,
+      required: true,
+    };
+    expect(encodeQuestion(decodeQuestion(input))).toEqual(input);
+  });
+
+  it("keeps legacy questions readable without introducing rich-form defaults", () => {
+    const input = {
+      id: "choice",
+      header: "Choice",
+      question: "Choose a target",
+      options: [{ label: "Web", description: "Browser" }],
+    };
+    expect(encodeQuestion(decodeQuestion(input))).toEqual(input);
+  });
+});
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 const LegacyShellStreamItem = Schema.Union([

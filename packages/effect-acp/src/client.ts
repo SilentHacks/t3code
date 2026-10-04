@@ -27,7 +27,7 @@ import {
 import { makeChildStdio, makeTerminationError } from "./_internal/stdio.ts";
 
 const decodeElicitationRequest = Schema.decodeUnknownEffect(
-  Schema.Union([AcpSchemaV2.CreateElicitationRequest, AcpSchemaV1.CreateElicitationRequest]),
+  Schema.Union([AcpSchema.CreateElicitationRequest, AcpSchemaV1.CreateElicitationRequest]),
 );
 
 export interface AcpClientOptions {

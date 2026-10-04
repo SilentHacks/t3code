@@ -40,6 +40,7 @@ const BUILT_IN_DRIVER_ORDER: ReadonlyArray<string> = [
   "grok",
   "opencode",
   "antigravity",
+  "omp",
 ];
 
 const driverRank = (driver: string): number => {
@@ -70,6 +71,13 @@ export const hydrateCachedProvider = (input: {
   readonly fallbackProvider: ServerProvider;
 }): ServerProvider => {
   if (!isCachedProviderCorrelated(input)) {
+    return input.fallbackProvider;
+  }
+
+  // The disk cache carries no profile/environment fingerprint. OMP resolves
+  // account, model and workspace catalogs from those inputs; an instance ID
+  // alone cannot establish that cached data still belongs to this profile.
+  if (input.fallbackProvider.driver === "omp") {
     return input.fallbackProvider;
   }
 

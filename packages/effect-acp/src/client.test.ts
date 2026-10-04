@@ -1431,6 +1431,60 @@ const elicitationForm = {
   },
 };
 const decodeWireResponse = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+it.effect.each(["elicitation/create", "session/elicitation", "_session/elicitation"])(
+  "preserves native JSON Schema choices and constraints over %s",
+  (method) =>
+    Effect.gen(function* () {
+      for (const union of ["anyOf", "oneOf"]) {
+        const { stdio, input, output } = yield* makeInMemoryStdio();
+        const acp = yield* AcpClient.make(stdio);
+        const form = {
+          ...elicitationForm,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              q0: {
+                type: "array",
+                items: {
+                  [union]: [
+                    { const: "Diff", title: "Diff" },
+                    { const: "Tools", title: "Tools", description: "Tool output" },
+                  ],
+                },
+                minItems: 1,
+                maxItems: 2,
+              },
+              q0__other: { type: "string", title: "Other" },
+              target: { type: "string", anyOf: [{ const: "native/model", title: "Native" }] },
+              count: { type: "integer", minimum: 1, maximum: 4 },
+            },
+            required: ["q0", "count"],
+            additionalProperties: false,
+          },
+        };
+        yield* acp.handleElicitation((request) => {
+          assert.deepEqual(request, form);
+          return Effect.succeed({ action: "accept", content: { q0: ["Diff"], count: 2 } });
+        });
+        yield* Queue.offer(
+          input,
+          yield* encodeJsonl(jsonRpcRequest(method, Schema.Unknown), {
+            jsonrpc: "2.0",
+            id: 77,
+            headers: [],
+            method,
+            params: form,
+          }),
+        );
+        const answer = { action: "accept", content: { q0: ["Diff"], count: 2 } };
+        assert.deepEqual(yield* decodeWireResponse(yield* Queue.take(output)), {
+          jsonrpc: "2.0",
+          id: 77,
+          result: method === "elicitation/create" ? answer : { action: answer },
+        });
+      }
+    }).pipe(Effect.scoped),
+);
 const decodeWireError = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ code: Schema.Finite }) })),
 );

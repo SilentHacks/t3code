@@ -14,7 +14,7 @@ import {
 // external 65/517 MiB fixtures also exercise the production threshold.
 const readTranscriptRecords = (
   path: string,
-  provider: "claude" | "codex" | "grok",
+  provider: "claude" | "codex" | "grok" | "omp",
   position?: TranscriptParsePosition,
 ) => readWithDefaultThreshold(path, provider, position, { streamingThresholdBytes: 256 * 1024 });
 
@@ -95,7 +95,7 @@ const grok = {
 
 async function scan(
   lines: readonly unknown[],
-  provider: "claude" | "codex" | "grok",
+  provider: "claude" | "codex" | "grok" | "omp",
   name = "history",
 ) {
   const path = NodePath.join(dir, `${name}.jsonl`);
@@ -106,6 +106,42 @@ async function scan(
 }
 
 describe("large usage records", () => {
+  it("streams large OMP journal entries and resumes only newly appended usage", async () => {
+    const entry = (id: string, output: number) => ({
+      type: "message",
+      id,
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "local",
+        model: "t3-smoke",
+        content: [{ type: "text", text: content }],
+        usage: { input: 150, output, cacheRead: 20, cacheWrite: 5, cost: { total: 0 } },
+      },
+    });
+    const first = await scan([entry("first", 25)], "omp");
+    expect(first.records).toHaveLength(1);
+    expect(first.records[0]).toMatchObject({
+      provider: "omp",
+      model: "local/t3-smoke",
+      reportedCostUsd: 0,
+      totals: {
+        uncachedInputTokens: 150,
+        outputTokens: 25,
+        cachedInputTokens: 20,
+        cacheCreationTokens: 5,
+      },
+    });
+    const path = NodePath.join(dir, "history.jsonl");
+    expect(first.records[0]?.sessionId).toBe(path);
+    await NodeFSP.appendFile(path, JSON.stringify(entry("second", 35)) + "\n");
+    const resumed = await readTranscriptRecords(path, "omp", first.position);
+    expect(resumed?.resumed).toBe(true);
+    expect(resumed?.records).toHaveLength(1);
+    expect(resumed?.records[0]?.totals.outputTokens).toBe(35);
+    const full = await readWithDefaultThreshold(path, "omp");
+    expect(full?.records).toEqual([...first.records, ...resumed!.records]);
+  });
   it("keeps usage after large Claude tool input, including fast-mode cost and dedupe metadata", async () => {
     const result = await scan([claude()], "claude");
     expect(result.records).toEqual([
