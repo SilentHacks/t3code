@@ -89,6 +89,10 @@ import {
   resolveEmbeddedTerminalContent,
   type AcpClientTerminals,
 } from "../../provider/acp/AcpClientTerminals.ts";
+import {
+  projectAcpElicitationForm,
+  type AcpElicitationAnswerError,
+} from "../../provider/acp/AcpElicitation.ts";
 import { ACP_SESSION_MODE_OPTION_ID } from "../../provider/acp/AcpSessionConfig.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import {
@@ -160,6 +164,10 @@ export interface AcpAdapterV2UserInputRequest {
   readonly nativeItemId: string;
   readonly nativeRequestId: string;
   readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
+  /** Validate before resolving the native callback so rejected answers can be retried. */
+  readonly validateAnswers?: (
+    answers: ProviderUserInputAnswers,
+  ) => Effect.Effect<ProviderUserInputAnswers, AcpElicitationAnswerError>;
 }
 
 export interface AcpAdapterV2ExtensionContext {
@@ -1060,22 +1068,6 @@ function selectAutoApprovedPermissionOption(
   );
 }
 
-function elicitationContent(
-  answers: ProviderUserInputAnswers,
-  allowedKeys: ReadonlySet<string>,
-): Record<string, EffectAcpSchema.ElicitationContentValue> {
-  const content: Record<string, EffectAcpSchema.ElicitationContentValue> = {};
-  for (const [key, value] of Object.entries(answers)) {
-    if (!allowedKeys.has(key)) continue;
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      content[key] = value;
-    } else if (Array.isArray(value)) {
-      content[key] = value.filter((entry): entry is string => typeof entry === "string");
-    }
-  }
-  return content;
-}
-
 interface ActiveTextSegment {
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
@@ -1404,6 +1396,7 @@ type PendingRuntimeRequest = {
   | {
       readonly type: "user_input";
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null>;
+      readonly validateAnswers: AcpAdapterV2UserInputRequest["validateAnswers"];
     }
 );
 
@@ -4810,6 +4803,7 @@ export function makeAcpAdapterV2(
               requestId,
               transportRequestId,
               answers,
+              validateAnswers: request.validateAnswers,
               runtimeRequest,
               node,
               turnItem,
@@ -5717,33 +5711,16 @@ export function makeAcpAdapterV2(
                 // than guessing at their semantics.
                 return { action: "decline" } as const;
               }
-              const requestedSchema = unknownRecord(params.requestedSchema);
-              const properties = unknownRecord(requestedSchema?.properties) ?? {};
+              const form = projectAcpElicitationForm(params.requestedSchema, params.message);
+              if (!form) return { action: "decline" } as const;
+              if (form.questions.length === 0) {
+                const content = yield* form.convertAnswers({}).pipe(Effect.option);
+                return Option.isSome(content)
+                  ? ({ action: "accept", content: content.value } as const)
+                  : ({ action: "decline" } as const);
+              }
               const elicitationScopeId =
                 "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
-              const questions = Object.entries(properties).map(
-                ([id, property], index): OrchestrationV2UserInputQuestion => {
-                  const record = unknownRecord(property);
-                  const enumValues = Array.isArray(record?.enum)
-                    ? record.enum.filter((value): value is string => typeof value === "string")
-                    : [];
-                  const options =
-                    enumValues.length > 0
-                      ? enumValues.map((value) => ({ label: value, description: value }))
-                      : record?.type === "boolean"
-                        ? [
-                            { label: "true", description: "Yes" },
-                            { label: "false", description: "No" },
-                          ]
-                        : [];
-                  return {
-                    id,
-                    header: nonEmptyText(record?.title, `Question ${index + 1}`),
-                    question: nonEmptyText(record?.description, params.message),
-                    options,
-                  };
-                },
-              );
               const userInput = yield* requestUserInputWithAdmission(
                 handlerGeneration,
                 Effect.gen(function* () {
@@ -5755,7 +5732,8 @@ export function makeAcpAdapterV2(
                   return {
                     nativeItemId: nativeRequestId,
                     nativeRequestId,
-                    questions,
+                    questions: form.questions,
+                    validateAnswers: form.convertAnswers,
                   };
                 }),
                 transportRequestId,
@@ -5765,9 +5743,14 @@ export function makeAcpAdapterV2(
                   ? ({ action: "cancel" } as const)
                   : ({
                       action: "accept",
-                      content: elicitationContent(
-                        userInput.answers,
-                        new Set(Object.keys(properties)),
+                      content: yield* form.convertAnswers(userInput.answers).pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new EffectAcpErrors.AcpTransportError({
+                              detail: "Invalid ACP elicitation response",
+                              cause,
+                            }),
+                        ),
                       ),
                     } as const);
               yield* userInput.acknowledgeNativeResponse;
@@ -6689,6 +6672,8 @@ export function makeAcpAdapterV2(
           const restartRequired = yield* Ref.get(runtimeRestartRequired);
           if (!restartRequired) return false;
           yield* restartAcpRuntime(threadId);
+          // The retired process's quarantine must not discard the new generation's replay.
+          yield* Ref.set(stoppedRunQuarantine, false);
           yield* Ref.set(runtimeRestartRequired, false);
           yield* Ref.set(activeSessionId, null);
           yield* Ref.set(activeSessionSetup, null);
@@ -7609,9 +7594,49 @@ export function makeAcpAdapterV2(
                       detail: `No pending ACP runtime request ${requestInput.requestId}`,
                     });
                   }
+                  let answers = requestInput.answers ?? null;
+                  if (
+                    pending.type === "user_input" &&
+                    pending.validateAnswers &&
+                    answers !== null
+                  ) {
+                    const validated = yield* pending.validateAnswers(answers).pipe(Effect.result);
+                    if (Result.isFailure(validated)) {
+                      // The command has already resolved the durable request. Reopen it
+                      // without settling the native callback or retrying the outbox effect.
+                      const turnItem =
+                        pending.turnItem.type === "user_input_request"
+                          ? {
+                              ...pending.turnItem,
+                              questions: pending.turnItem.questions.map((question) =>
+                                !validated.failure.field || validated.failure.field === question.id
+                                  ? {
+                                      ...question,
+                                      question: `${question.question}\n\n${validated.failure.message}`,
+                                    }
+                                  : question,
+                              ),
+                            }
+                          : pending.turnItem;
+                      yield* emitProviderEvent({
+                        type: "node.updated",
+                        driver,
+                        node: pending.node,
+                      });
+                      yield* emitProviderEvent({
+                        type: "runtime_request.updated",
+                        driver,
+                        threadId: pending.node.threadId,
+                        runtimeRequest: pending.runtimeRequest,
+                      });
+                      yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
+                      return;
+                    }
+                    answers = validated.success;
+                  }
                   const settled =
                     pending.type === "user_input"
-                      ? yield* Deferred.succeed(pending.answers, requestInput.answers ?? null)
+                      ? yield* Deferred.succeed(pending.answers, answers)
                       : requestInput.decision === undefined
                         ? yield* new ProviderAdapter.ProviderAdapterProtocolError({
                             driver,

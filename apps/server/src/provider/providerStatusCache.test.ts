@@ -14,6 +14,7 @@ import * as Logger from "effect/Logger";
 import {
   hydrateCachedProvider,
   isCachedProviderCorrelated,
+  orderProviderSnapshots,
   readProviderStatusCache,
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
@@ -43,6 +44,36 @@ const makeProvider = (
 });
 
 it.layer(NodeServices.layer)("providerStatusCache", (it) => {
+  it("orders OMP after existing core providers and before unknown drivers", () => {
+    const omp = makeProvider(ProviderDriverKind.make("omp"));
+    const custom = makeProvider(ProviderDriverKind.make("custom"));
+    const codex = makeProvider(CODEX_DRIVER);
+    assert.deepEqual(
+      orderProviderSnapshots([custom, omp, codex]).map((provider) => provider.driver),
+      ["codex", "omp", "custom"],
+    );
+  });
+
+  it("does not hydrate OMP account or workspace data without a profile/environment correlation", () => {
+    const driver = ProviderDriverKind.make("omp");
+    const cached = makeProvider(driver, {
+      auth: { status: "authenticated", email: "previous@example.com" },
+      workspaceSnapshots: [
+        {
+          cwd: "/old-project",
+          checkedAt: "2026-04-11T00:00:00.000Z",
+          slashCommands: [],
+          skills: [],
+        },
+      ],
+    });
+    const fallback = makeProvider(driver, { auth: { status: "unknown" }, status: "warning" });
+    assert.strictEqual(
+      hydrateCachedProvider({ cachedProvider: cached, fallbackProvider: fallback }),
+      fallback,
+    );
+  });
+
   it.effect("logs structural diagnostics without retaining invalid cache contents", () => {
     const messages: Array<unknown> = [];
     const logger = Logger.make<unknown, void>((options) => {

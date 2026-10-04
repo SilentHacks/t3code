@@ -1617,9 +1617,14 @@ export function buildPendingUserInputAnswers(
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
     if (answer === null) {
+      if (question.required === false && !draftAnswers[question.id]?.attachmentsBlocked) continue;
       return null;
     }
-    answers[question.id] = answer;
+    Object.defineProperty(answers, question.id, {
+      value: answer,
+      enumerable: true,
+      configurable: true,
+    });
   }
 
   return answers;

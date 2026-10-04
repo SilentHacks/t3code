@@ -41,6 +41,7 @@ function providerDisplayLabel(provider: {
   if (provider.driver === "codex") return "Codex";
   if (provider.driver === "claudeAgent") return "Claude";
   if (provider.driver === "pi") return "Pi";
+  if (provider.driver === "omp") return "Oh My Pi";
   return provider.instanceId;
 }
 
@@ -69,7 +70,7 @@ function normalizeSelectionOptions(
       };
 }
 
-/** Whether a known Antigravity selection needs setup or a different model. */
+/** Whether a provider with a dynamic catalog needs setup or a different model. */
 export function isModelSelectionUnavailable(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection | null | undefined,
@@ -83,7 +84,7 @@ export function isModelSelectionUnavailable(
   const driver =
     provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
   return (
-    driver === "antigravity" &&
+    (driver === "antigravity" || driver === "omp") &&
     (!provider ||
       !provider.enabled ||
       !provider.installed ||
@@ -110,7 +111,7 @@ export function resolveSelectableModelSelection(
   );
   const driver =
     provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
-  if (driver === "antigravity") {
+  if (driver === "antigravity" || driver === "omp") {
     return selection;
   }
   return provider &&
@@ -136,7 +137,11 @@ export function resolveDefaultableModelSelection(
   }
   const provider = config.providers.find((candidate) => candidate.instanceId === usable.instanceId);
   const model = provider?.models.find((candidate) => candidate.slug === usable.model);
-  return provider?.driver !== "antigravity" && model?.isLegacy === true ? null : usable;
+  return provider?.driver !== "antigravity" &&
+    provider?.driver !== "omp" &&
+    model?.isLegacy === true
+    ? null
+    : usable;
 }
 
 export function resolveNewTaskModelSelection(input: {
@@ -168,7 +173,8 @@ export function buildModelOptions(
       !provider.enabled ||
       !provider.installed ||
       provider.auth.status === "unauthenticated" ||
-      (provider.driver === "antigravity" && provider.availability === "unavailable")
+      ((provider.driver === "antigravity" || provider.driver === "omp") &&
+        provider.availability === "unavailable")
     ) {
       continue;
     }
@@ -211,7 +217,7 @@ export function buildModelOptions(
       options.set(key, {
         ...existing,
         selection:
-          existing.providerDriver === "antigravity"
+          existing.providerDriver === "antigravity" || existing.providerDriver === "omp"
             ? fallbackModelSelection
             : normalizeSelectionOptions(fallbackModelSelection, existing.capabilities),
       });

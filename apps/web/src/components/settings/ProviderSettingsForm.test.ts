@@ -63,6 +63,19 @@ describe("ProviderSettingsForm helpers", () => {
     ]);
   });
 
+  it("offers OMP with executable and profile controls, without a fixed model catalog", () => {
+    const omp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("omp")];
+    expect(omp?.label).toBe("Oh My Pi");
+    expect(deriveProviderSettingsFields(omp!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "profile",
+    ]);
+    const profile = deriveProviderSettingsFields(omp!).find((field) => field.key === "profile");
+    expect(
+      nextProviderConfigWithFieldValue({ customModels: ["native/model"] }, profile!, "work"),
+    ).toEqual({ customModels: ["native/model"], profile: "work" });
+  });
+
   it("derives a select control with its choices for the Antigravity sign-in method", () => {
     const antigravity = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("antigravity")];
     expect(antigravity).toBeDefined();

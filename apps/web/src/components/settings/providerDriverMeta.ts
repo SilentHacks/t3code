@@ -6,6 +6,7 @@ import {
   CursorSettings,
   GrokSettings,
   OpenCodeSettings,
+  OmpSettings,
   PiSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
@@ -90,6 +91,11 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     value: ProviderDriverKind.make("pi"),
     label: "Pi",
     settingsSchema: PiSettings,
+  },
+  {
+    value: ProviderDriverKind.make("omp"),
+    label: "Oh My Pi",
+    settingsSchema: OmpSettings,
   },
   {
     value: ProviderDriverKind.make("acpRegistry"),

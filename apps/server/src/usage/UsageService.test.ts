@@ -158,6 +158,77 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 }
 
 describe("UsageService", () => {
+  it.live(
+    "reads named OMP profiles, deduplicates native forks and keeps disabled-instance history",
+    () =>
+      Effect.gen(function* () {
+        const { home, settings } = yield* setup;
+        const sessions = NodePath.join(home, ".omp", "profiles", "work", "agent", "sessions");
+        const entry = (id: string, output: number) => ({
+          type: "message",
+          id,
+          timestamp: "2026-08-01T10:00:00Z",
+          message: {
+            role: "assistant",
+            provider: "local",
+            model: "t3-smoke",
+            usage: { input: 150, output, cacheRead: 20, cacheWrite: 5, cost: { total: 0 } },
+          },
+        });
+        const original = entry("copied", 25);
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(sessions, { recursive: true });
+          await NodeFSP.writeFile(
+            NodePath.join(sessions, "original.jsonl"),
+            encodeUnknownJsonString(original) + "\n",
+          );
+          await NodeFSP.writeFile(
+            NodePath.join(sessions, "fork.jsonl"),
+            [original, entry("new", 35)].map((line) => encodeUnknownJsonString(line)).join("\n") +
+              "\n",
+          );
+        });
+        const summaries = yield* Effect.gen(function* () {
+          const service = yield* UsageService.make;
+          const first = yield* service.readSummary(WINDOW);
+          const cached = yield* service.readSummary(WINDOW);
+          yield* Effect.promise(() =>
+            NodeFSP.appendFile(
+              NodePath.join(sessions, "fork.jsonl"),
+              encodeUnknownJsonString(entry("appended", 45)) + "\n",
+            ),
+          );
+          const appended = yield* service.readSummary(WINDOW);
+          return { first, cached, appended };
+        }).pipe(
+          Effect.provide(
+            serviceLayers({
+              prefix: "usage-omp-profiles",
+              home,
+              settings: {
+                ...settings,
+                providers: { ...settings.providers, omp: { profile: "work", enabled: false } },
+                providerInstances: {
+                  [ProviderInstanceId.make("omp-extra")]: {
+                    driver: ProviderDriverKind.make("omp"),
+                    config: { profile: "work", enabled: false },
+                  },
+                },
+              },
+            }),
+          ),
+        );
+        assert.strictEqual(totalOutputTokens(summaries.first), 60);
+        assert.strictEqual(totalOutputTokens(summaries.cached), 60);
+        assert.strictEqual(totalOutputTokens(summaries.appended), 105);
+        assert.strictEqual(
+          summaries.first.sources.filter((source) => source.fingerprint.provider === "omp").length,
+          1,
+        );
+        assert.strictEqual(summaries.first.buckets[0]?.provider, "omp");
+        assert.strictEqual(summaries.first.buckets[0]?.model, "local/t3-smoke");
+      }).pipe(Effect.scoped),
+  );
   it.live.each([
     { explicitDefault: true, label: "explicit" },
     { explicitDefault: false, label: "legacy" },

@@ -2,8 +2,13 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
+  PROVIDER_DISPLAY_NAMES,
+} from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 // ── ModelSelection: instance-keyed wire shape + legacy decoder ────────
 //
@@ -85,6 +90,42 @@ it.effect("ModelSelection encodes to the canonical instanceId wire form", () =>
     });
   }),
 );
+
+it.effect("ModelSelection preserves native OMP model and thinking option ids", () =>
+  Effect.gen(function* () {
+    const input = {
+      instanceId: "omp_work",
+      model: "vendor/model:preview/variant",
+      options: [{ id: "thinking", value: "auto" }],
+    };
+    const parsed = yield* decodeModelSelection(input);
+    assert.deepStrictEqual(yield* encodeModelSelection(parsed), input);
+  }),
+);
+
+it.effect(
+  "ModelSelection canonicalizes legacy OMP selections without renaming native options",
+  () =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeModelSelection({
+        provider: "omp",
+        model: "anthropic/claude-sonnet-4-6",
+        options: { thinking: "high" },
+      });
+      assert.deepStrictEqual(yield* encodeModelSelection(parsed), {
+        instanceId: "omp",
+        model: "anthropic/claude-sonnet-4-6",
+        options: [{ id: "thinking", value: "high" }],
+      });
+    }),
+);
+
+it("OMP defaults retain its session-selected model for chat and unattended generation", () => {
+  const omp = ProviderDriverKind.make("omp");
+  assert.strictEqual(DEFAULT_MODEL_BY_PROVIDER[omp], "default");
+  assert.strictEqual(DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[omp], "default");
+  assert.strictEqual(PROVIDER_DISPLAY_NAMES[omp], "Oh My Pi");
+});
 
 it.effect("ModelSelection rejects malformed instance ids", () =>
   Effect.gen(function* () {

@@ -341,10 +341,13 @@ const make = Effect.gen(function* () {
               runtimeMode: DEFAULT_RUNTIME_MODE,
               status: "stopped",
               lastSeenAt: thread.updatedAt,
+              // V2 ACP resumes through providerThread.nativeThreadRef. Do not invent a legacy cursor.
               resumeCursor:
-                thread.source === "codex"
-                  ? { threadId: thread.providerSessionId }
-                  : { threadId, resume: thread.providerSessionId },
+                thread.source === "omp"
+                  ? null
+                  : thread.source === "codex"
+                    ? { threadId: thread.providerSessionId }
+                    : { threadId, resume: thread.providerSessionId },
               runtimePayload: { cwd: project.workspaceRoot },
             },
             { onConflict: "ignore" },

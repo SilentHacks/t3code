@@ -73,6 +73,7 @@ export function totalTokens(totals: UsageTokenTotals): number {
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
   if (provider === "claude") return line.includes('"usage"');
+  if (provider === "omp") return line.includes('"usage"');
   if (provider === "grok") return line.includes('"turn_completed"');
   return line.includes('"token_count"');
 }
@@ -86,6 +87,68 @@ export const GROK_COST_USD_TICKS_PER_DOLLAR = 10_000_000_000;
 function grokCostTicksToUsd(ticks: unknown): number | null {
   if (typeof ticks !== "number" || !Number.isFinite(ticks) || ticks < 0) return null;
   return ticks / GROK_COST_USD_TICKS_PER_DOLLAR;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Oh My Pi                                                                   */
+/* -------------------------------------------------------------------------- */
+
+export function parseOmpLine(line: string, sessionId: string): UsageRecord | null {
+  try {
+    return parseOmpRecord(JSON.parse(line), sessionId);
+  } catch {
+    return null;
+  }
+}
+
+export function parseOmpRecord(parsed: unknown, sessionId: string): UsageRecord | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record["type"] !== "message") return null;
+  const message = record["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const native = message as Record<string, unknown>;
+  if (native["role"] !== "assistant") return null;
+  const usage = native["usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const totals = usage as Record<string, unknown>;
+  const orchestration = totals["orchestration"];
+  const overhead =
+    typeof orchestration === "object" && orchestration !== null
+      ? (orchestration as Record<string, unknown>)
+      : {};
+  const timestampMs = parseTimestampMs(record["timestamp"]);
+  const model = native["model"];
+  const provider = native["provider"];
+  if (timestampMs === null || typeof model !== "string" || model.length === 0) return null;
+  const modelId =
+    typeof provider === "string" && provider.length > 0 ? `${provider}/${model}` : model;
+  const cost = totals["cost"];
+  const reported =
+    typeof cost === "object" && cost !== null ? (cost as Record<string, unknown>)["total"] : null;
+  const entryId = record["id"];
+  return {
+    provider: "omp",
+    timestampMs,
+    model: modelId,
+    rateModel: model,
+    sessionId,
+    totals: {
+      uncachedInputTokens: int(totals["input"]) + int(overhead["input"]),
+      cachedInputTokens: int(totals["cacheRead"]) + int(overhead["cacheRead"]),
+      cacheCreationTokens: int(totals["cacheWrite"]),
+      outputTokens: int(totals["output"]) + int(overhead["output"]),
+      reasoningTokens: Math.min(int(totals["reasoningTokens"]), int(totals["output"])),
+    },
+    reportedCostUsd:
+      typeof reported === "number" && Number.isFinite(reported) && reported >= 0 ? reported : null,
+    speed: "standard",
+    // Native forks copy journal entries; copied usage is not a new model request.
+    dedupeKey:
+      typeof entryId === "string" && entryId.length > 0
+        ? `omp:${modelId}:${timestampMs}:${entryId}`
+        : null,
+  };
 }
 
 /* -------------------------------------------------------------------------- */

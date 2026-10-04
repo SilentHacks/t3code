@@ -7,6 +7,7 @@ import {
   ClientSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
+  OmpSettings,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -217,6 +218,146 @@ describe("custom model settings", () => {
     expect(() =>
       decodeServerSettingsPatch({ providers: { codex: { customModels: [{ name: "no slug" }] } } }),
     ).toThrow();
+  });
+});
+
+describe("OmpSettings", () => {
+  const decodeOmpSettings = Schema.decodeUnknownSync(OmpSettings);
+  const defaults = { enabled: false, binaryPath: "omp", profile: "", customModels: [] };
+
+  it("keeps OMP opt-in for new and existing settings", () => {
+    expect(decodeOmpSettings({})).toEqual(defaults);
+    expect(decodeServerSettings({}).providers.omp).toEqual(defaults);
+    expect(
+      decodeServerSettings({ providers: { codex: { enabled: false } } }).providers.omp,
+    ).toEqual(defaults);
+    expect(DEFAULT_SERVER_SETTINGS.providers.omp).toEqual(defaults);
+  });
+
+  it.each(["", "   "])("uses the executable fallback for a blank binary path %j", (binaryPath) => {
+    expect(decodeOmpSettings({ binaryPath }).binaryPath).toBe("omp");
+  });
+
+  it("round-trips profile, executable and native custom model options in legacy settings", () => {
+    const customModels = [
+      "vendor/model:preview",
+      {
+        slug: "anthropic/claude-sonnet-4-6",
+        name: "Sonnet",
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "thinking",
+              label: "Thinking",
+              type: "select",
+              currentValue: "auto",
+              options: [
+                { id: "off", label: "Off" },
+                { id: "auto", label: "Auto", isDefault: true },
+                { id: "high", label: "High" },
+              ],
+            },
+          ],
+        },
+      },
+    ];
+    const decoded = decodeServerSettings({
+      providers: {
+        omp: {
+          enabled: true,
+          binaryPath: "  /opt/omp binary  ",
+          profile: "  work  ",
+          customModels,
+        },
+      },
+    });
+    expect(decoded.providers.omp).toEqual({
+      enabled: true,
+      binaryPath: "/opt/omp binary",
+      profile: "work",
+      customModels,
+    });
+    expect(encodeServerSettings(decoded).providers?.omp).toEqual(decoded.providers.omp);
+  });
+
+  it("accepts partial patches without inserting defaults or resetting unrelated settings", () => {
+    expect(decodeServerSettingsPatch({})).not.toHaveProperty("providers");
+    expect(decodeServerSettingsPatch({ providers: { omp: {} } })).toEqual({
+      providers: { omp: {} },
+    });
+    expect(decodeServerSettingsPatch({ providers: { omp: { profile: "  personal  " } } })).toEqual({
+      providers: { omp: { profile: "personal" } },
+    });
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          omp: { enabled: true, binaryPath: "  omp-local  ", customModels: ["native/id"] },
+        },
+      }),
+    ).toEqual({
+      providers: { omp: { enabled: true, binaryPath: "omp-local", customModels: ["native/id"] } },
+    });
+  });
+
+  it("lets patches clear a profile, executable override and custom models", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: { omp: { enabled: false, binaryPath: "  ", profile: "  ", customModels: [] } },
+      }),
+    ).toEqual({
+      providers: { omp: { enabled: false, binaryPath: "", profile: "", customModels: [] } },
+    });
+  });
+
+  it.each([
+    { enabled: "true" },
+    { binaryPath: 123 },
+    { profile: null },
+    { customModels: "model" },
+    { customModels: [{ name: "missing slug" }] },
+    {
+      customModels: [
+        { slug: "native/model", capabilities: { optionDescriptors: [{ type: "select" }] } },
+      ],
+    },
+  ])("rejects malformed OMP settings in snapshots and patches: %j", (omp) => {
+    expect(() => decodeOmpSettings(omp)).toThrow();
+    expect(() => decodeServerSettings({ providers: { omp } })).toThrow();
+    expect(() => decodeServerSettingsPatch({ providers: { omp } })).toThrow();
+  });
+
+  it.each([
+    [{}, false],
+    [{ enabled: true }, true],
+    [{ config: { enabled: true } }, true],
+    [{ enabled: true, config: { enabled: false } }, false],
+    [{ enabled: false, config: { enabled: true } }, false],
+  ] as const)("resolves instance opt-in and explicit disable for %j", (flags, expected) => {
+    expect(
+      resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make("omp"), ...flags }),
+    ).toBe(expected);
+  });
+
+  it("preserves independent OMP profiles, environment secrets and unknown-driver config envelopes", () => {
+    const providerInstances = {
+      omp_work: {
+        driver: "omp",
+        enabled: true,
+        config: { profile: "work", binaryPath: "  /custom/omp  " },
+        environment: [{ name: "OMP_API_KEY", value: "test-only-secret", sensitive: true }],
+      },
+      omp_personal: { driver: "omp", enabled: false, config: { profile: "personal" } },
+      future_agent: {
+        driver: "futureAgent",
+        config: { future: { options: [false, 7, null] }, binaryPath: "  leave opaque  " },
+      },
+    };
+    expect(decodeServerSettingsPatch({ providerInstances }).providerInstances).toEqual(
+      providerInstances,
+    );
+    expect(
+      encodeServerSettings(decodeServerSettings({ providerInstances })).providerInstances,
+    ).toEqual(providerInstances);
   });
 });
 

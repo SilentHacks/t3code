@@ -14,6 +14,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
+import { OmpProviderSettings } from "./OmpProviderSettings";
 import {
   AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
@@ -40,6 +41,7 @@ export function SettingsProviderAccountsRouteScreen() {
           ) : (
             selectedTargets.map((environment) => (
               <SettingsSection key={environment.environmentId} title={environment.label}>
+                <OmpProviderSettings environment={environment} />
                 {environment.serverConfig.providers
                   .filter(
                     (provider) =>
@@ -59,7 +61,8 @@ export function SettingsProviderAccountsRouteScreen() {
                     (provider.driver === "acpRegistry" && provider.installed),
                 ) ? (
                   <Text className="p-4 text-foreground-muted">
-                    Configure a provider with in-app sign-in in web or desktop Settings.
+                    OMP sign-in runs on the environment. Configure other providers with in-app
+                    sign-in in web or desktop Settings.
                   </Text>
                 ) : null}
               </SettingsSection>

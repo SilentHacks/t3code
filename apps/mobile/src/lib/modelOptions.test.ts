@@ -13,6 +13,50 @@ import {
 } from "./modelOptions";
 
 describe("mobile model options", () => {
+  it("keeps unavailable OMP models and options instead of silently selecting another provider", () => {
+    const selection = {
+      instanceId: ProviderInstanceId.make("omp_work"),
+      model: "native/model",
+      options: [{ id: "thinking", value: "high" }],
+    };
+    const provider = {
+      instanceId: selection.instanceId,
+      driver: "omp",
+      displayName: "OMP Work",
+      enabled: true,
+      installed: true,
+      auth: { status: "authenticated" },
+      models: [{ slug: selection.model, name: "Native", capabilities: null }],
+    };
+    for (const change of [
+      { enabled: false },
+      { installed: false },
+      { auth: { status: "unauthenticated" } },
+      { availability: "unavailable" },
+      { models: [] },
+    ]) {
+      const config = { providers: [{ ...provider, ...change }] } as unknown as ServerConfig;
+      expect(isModelSelectionUnavailable(config, selection)).toBe(true);
+      expect(resolveSelectableModelSelection(config, selection)).toBe(selection);
+      expect(resolveDefaultableModelSelection(config, selection)).toBe(selection);
+      expect(
+        buildModelOptions(config, selection).find(
+          (option) => option.selection.model === selection.model,
+        ),
+      ).toMatchObject({ selection, providerDriver: "omp", isUnavailable: true });
+    }
+    const missing = {
+      providers: [],
+      settings: {
+        providerInstances: { [selection.instanceId]: { driver: "omp", displayName: "OMP Work" } },
+      },
+    } as unknown as ServerConfig;
+    expect(isModelSelectionUnavailable(missing, selection)).toBe(true);
+    expect(resolveSelectableModelSelection(missing, selection)).toBe(selection);
+    const restored = { providers: [provider] } as unknown as ServerConfig;
+    expect(isModelSelectionUnavailable(restored, selection)).toBe(false);
+    expect(buildModelOptions(restored, selection)[0]?.selection).toBe(selection);
+  });
   it("groups models by provider and flags legacy entries", () => {
     const config = {
       providers: [

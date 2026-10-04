@@ -320,7 +320,7 @@ const CompatElicitationRpc = Rpc.make(CLIENT_METHODS.elicitation_create, {
 // Native ACP agents still use the older nested elicitation response.
 const legacyElicitationRpc = <const Method extends string>(method: Method) =>
   Rpc.make(method, {
-    payload: AcpSchema.CreateElicitationRequest,
+    payload: AcpCompat.CreateElicitationRequest,
     success: Schema.Struct({
       action: AcpSchema.CreateElicitationResponse,
       _meta: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.Json))),

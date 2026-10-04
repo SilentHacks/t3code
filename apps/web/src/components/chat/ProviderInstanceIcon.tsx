@@ -11,6 +11,7 @@ import {
   Icon,
   OpenAI,
   OpenCodeIcon,
+  OmpIcon,
   PiAgentIcon,
 } from "../Icons";
 
@@ -29,6 +30,7 @@ const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
   [ProviderDriverKind.make("grok")]: GrokIcon,
   [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
   [ProviderDriverKind.make("pi")]: PiAgentIcon,
+  [ProviderDriverKind.make("omp")]: OmpIcon,
 };
 
 const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
@@ -37,6 +39,7 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
   [ProviderDriverKind.make("cursor")]: "text-[#26251E] dark:text-[#EDECEC]",
   [ProviderDriverKind.make("grok")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
   [ProviderDriverKind.make("pi")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
+  [ProviderDriverKind.make("omp")]: "text-foreground",
   [ProviderDriverKind.make("opencode")]: "text-[#211E1E] dark:text-[#F1ECEC]",
   [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
 };

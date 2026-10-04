@@ -97,10 +97,11 @@ function appendUnavailableDynamicModelSelection(
   selectedModel: string | null | undefined,
   hiddenModels: ReadonlyArray<string>,
 ): AppModelOption[] {
-  if (provider !== "opencode" && provider !== "antigravity") return options;
+  if (provider !== "opencode" && provider !== "antigravity" && provider !== "omp") return options;
   const slug = normalizeCustomModelSlug(selectedModel);
   if (!slug) return options;
   if (provider === "antigravity" && slug === ANTIGRAVITY_DEFAULT_MODEL) return options;
+  if (provider === "omp" && slug === "default") return options;
 
   // A model that exists in the raw catalog can be absent from `options`
   // because the user hid it. Keep that preference authoritative.
@@ -307,7 +308,9 @@ export function resolveAppModelSelectionForInstance(
   }
   if (
     resolutionOptions?.preserveUnavailableSelection &&
-    (entry.driverKind === "opencode" || entry.driverKind === "antigravity")
+    (entry.driverKind === "opencode" ||
+      entry.driverKind === "antigravity" ||
+      entry.driverKind === "omp")
   ) {
     const unavailableSelection = normalizeCustomModelSlug(selectedModel);
     const hiddenModels = readInstanceModelPreferences(settings, entry.instanceId).hiddenModels;
@@ -315,7 +318,8 @@ export function resolveAppModelSelectionForInstance(
       unavailableSelection &&
       !hiddenModels.includes(unavailableSelection) &&
       resolveSelectableModel(entry.driverKind, selectedModel, entry.models) === null &&
-      (entry.driverKind !== "antigravity" || unavailableSelection !== ANTIGRAVITY_DEFAULT_MODEL)
+      (entry.driverKind !== "antigravity" || unavailableSelection !== ANTIGRAVITY_DEFAULT_MODEL) &&
+      (entry.driverKind !== "omp" || unavailableSelection !== "default")
     ) {
       return unavailableSelection;
     }
