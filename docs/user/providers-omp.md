@@ -4,6 +4,44 @@ T3 Code can use an existing [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi
 OMP runs on the environment hosting the T3 Code server, including when you connect from web,
 desktop, mobile, or T3 Connect. OMP 18.6.0 is the integration baseline.
 
+## Ubuntu VPS with T3 Connect
+
+This fork includes a source installer for Ubuntu 22.04+ on x64 or ARM64. Allow several GB of
+disk and at least 4 GB of RAM/swap for building. Run it as the user who will run OMP:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates build-essential python3 pkg-config libsecret-1-dev
+curl -fsSL https://raw.githubusercontent.com/SilentHacks/t3code/main/scripts/install-fork-server.sh -o install-t3-omp.sh
+bash install-t3-omp.sh --systemd
+```
+
+It builds the fork with the production public Connect configuration and installs a separate
+`~/.local/bin/t3-omp` launcher. It leaves stock `t3` and `~/.t3` untouched; the fork uses
+`~/.t3-omp`. To deliberately reuse another T3 home, set `T3CODE_FORK_HOME` before installation.
+Do not run two servers against the same home.
+
+Authorize the VPS using your usual T3 Connect account, then start the fork service:
+
+```sh
+~/.local/bin/t3-omp connect link --headless
+systemctl --user daemon-reload
+systemctl --user enable --now t3-omp.service
+sudo loginctl enable-linger "$USER"
+```
+
+Open the rebuilt fork's Mac client, sign into the same Connect account, and select the VPS.
+Install and authenticate OMP **on the VPS**, then add it under **Settings → Providers**.
+The stock hosted client is not replaced by this installer; use the fork client for the full OMP UI.
+
+Without `--systemd`, run `~/.local/bin/t3-omp serve` after linking. The server establishes the
+normal managed Connect tunnel; no public listener or port-forwarding setup is necessary.
+Inspect the service with `journalctl --user -u t3-omp.service -f`.
+
+To update, rerun the fork installer and restart `t3-omp.service`. Do not use the upstream
+installer, `t3 update`, or the stock background-service installer: those can download a runtime
+without OMP. Previous fork builds are retained for rollback.
+
 ## Set up OMP
 
 1. Install OMP on the server machine using OMP's installation instructions.
