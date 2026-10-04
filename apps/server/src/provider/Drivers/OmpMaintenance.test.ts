@@ -9,7 +9,7 @@ import { makeOmpMaintenanceResolver } from "./OmpMaintenance.ts";
 const windows = HostProcessPlatform.defaultValue() === "win32";
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 describe("OmpMaintenance", () => {
-  it.effect.skipIf(windows)(
+  it.live.skipIf(windows)(
     "targets the resolved install/profile/environment and parses the actual updater's channel",
     () =>
       Effect.gen(function* () {
@@ -58,7 +58,7 @@ console.log('Current version: 18.5.0');console.log('New version available: 18.6.
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect.skipIf(windows)(
+  it.live.skipIf(windows)(
     "does not call an update current merely because it printed Current version",
     () =>
       Effect.gen(function* () {
