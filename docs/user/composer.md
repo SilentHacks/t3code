@@ -208,6 +208,12 @@ row above the composer shows the goal and its progress.
 
 ## Context in your message
 
+On web and desktop, drag an open workspace file's tab into the composer to
+reference it, just as you can drag from the file browser. This does not attach
+a copy of the file. You can also choose **Add reference to chat** from the
+file tab's context menu; focus the tab and press `Shift+F10` to open it with
+the keyboard. Attachment previews are not workspace file references.
+
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,
 a review comment from a diff or file, a preview annotation, or a file. You can type before and
 after a chip, move it by cutting and pasting, and delete it like a character. Hover a chip for

@@ -1,5 +1,5 @@
 import {
-  COMPOSER_MENTION_DRAG_TYPE,
+  writeComposerMentionDrag,
   composerMentionFromTreePath,
 } from "~/components/chat/composerMentionDrag";
 
@@ -80,7 +80,7 @@ export function createFileTreeDragMentionController(
         return;
       }
       draggedPaths = dragged;
-      event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mentions.join(" "));
+      writeComposerMentionDrag(event.dataTransfer, mentions);
     },
     handleDragEnd() {
       if (draggedPaths.length === 0) {

@@ -1,4 +1,5 @@
 import { ChatCanvas } from "./chat/ChatCanvas";
+import { composerMentionFromTreePath } from "./chat/composerMentionDrag";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
   resolveBackgroundDraftWorkspaceOptions,
@@ -1534,7 +1535,7 @@ export default function ChatView(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, settleAndNewThread, pinThread, confirmAndUnpinThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -5966,6 +5967,23 @@ export default function ChatView(props: ChatViewProps) {
     finishRightPanelSurfaceClose,
     rightPanelState.surfaces,
   ]);
+  const addRightPanelFileReference = useCallback(
+    (relativePath: string) => {
+      if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
+      const mention = composerMentionFromTreePath(relativePath);
+      if (
+        mention &&
+        !composerRef.current?.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true })
+      ) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add to chat",
+          description: "The composer is busy; try again once it is ready.",
+        });
+      }
+    },
+    [composerRef, routeThreadKey],
+  );
   const copyRightPanelFilePath = useCallback((relativePath: string) => {
     if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
       toastManager.add(
@@ -7759,6 +7777,14 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.settleAndNew") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat && isServerThread && activeThreadRef)
+          void settleAndNewThread(activeThreadRef);
+        return;
+      }
+
       if (command === "thread.settle") {
         event.preventDefault();
         event.stopPropagation();
@@ -8009,6 +8035,7 @@ export default function ChatView(props: ChatViewProps) {
     onToggleDiff,
     pinThread,
     settleThread,
+    settleAndNewThread,
     supportsPinning,
     supportsSettlement,
     confirmAndUnpinThread,
@@ -11554,6 +11581,8 @@ export default function ChatView(props: ChatViewProps) {
           onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
           onCloseAllSurfaces={closeAllRightPanelSurfaces}
           onCopyFilePath={copyRightPanelFilePath}
+          composerSourceKey={scopedThreadKey(activeThreadRef)}
+          onAddFileReference={addRightPanelFileReference}
           onAddBrowser={() => createBrowserSurface()}
           onAddBrowserInProfile={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
@@ -11609,6 +11638,8 @@ export default function ChatView(props: ChatViewProps) {
             onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
             onCloseAllSurfaces={closeAllRightPanelSurfaces}
             onCopyFilePath={copyRightPanelFilePath}
+            composerSourceKey={scopedThreadKey(activeThreadRef)}
+            onAddFileReference={addRightPanelFileReference}
             onAddBrowser={() => createBrowserSurface()}
             onAddBrowserInProfile={createBrowserSurface}
             onAddTerminal={addTerminalSurface}

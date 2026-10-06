@@ -18,6 +18,21 @@ const provider: ServerProvider = {
 };
 
 describe("getProviderSummary", () => {
+  it.each(["unsupported", "broken"] as const)(
+    "retains %s OpenCode version guidance in Settings",
+    (status) => {
+      const compatibility = {
+        status,
+        message: "Use OpenCode 2.0.18 or newer.",
+        recommendedVersion: null,
+        recommendedRange: ">=2.0.18",
+      };
+      expect(getProviderVersionAdvisoryPresentation(undefined, compatibility)).toMatchObject({
+        detail: compatibility.message,
+        emphasis: "strong",
+      });
+    },
+  );
   it("reports ready providers with unknown authentication as available", () => {
     expect(getProviderSummary({ ...provider, auth: { status: "unknown" } })).toEqual({
       headline: "Available",

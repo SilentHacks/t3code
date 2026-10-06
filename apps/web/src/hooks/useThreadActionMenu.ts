@@ -84,6 +84,7 @@ export function useThreadActionMenu(input: {
   );
   const {
     settleThread,
+    settleAndNewThread,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
@@ -214,6 +215,9 @@ export function useThreadActionMenu(input: {
           case "settle":
             await reportFailure("Failed to settle thread", () => settleThread(threadRef));
             return;
+          case "settle-and-new":
+            await settleAndNewThread(threadRef);
+            return;
           case "unsettle":
             await reportFailure("Failed to un-settle thread", () => unsettleThread(threadRef));
             return;
@@ -343,6 +347,7 @@ export function useThreadActionMenu(input: {
       router,
       setThreadAutoSettle,
       settleThread,
+      settleAndNewThread,
       snoozeThread,
       threadRef,
       timestampFormat,

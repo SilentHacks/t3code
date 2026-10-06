@@ -1,4 +1,5 @@
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -6137,13 +6138,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // editor never sees the drop; the load-bearing rules (native stop, "move"
   // effect, no eager focus) live in makeComposerMentionDragHandlers.
   const composerMentionDragHandlers = makeComposerMentionDragHandlers({
+    sourceKey: scopedThreadKey(routeThreadRef),
     insertMentionAtEnd: (text) => insertComposerTextAtEnd(text, { ensureLeadingBoundary: true }),
     setDragActive: setIsDragOverComposer,
-    onInsertRejected: () => {
+    onInsertRejected: (reason) => {
       toastManager.add({
         type: "error",
         title: "Unable to add to chat",
-        description: "The composer is busy; try again once it is ready.",
+        description:
+          reason === "scope-mismatch"
+            ? "Drop this file reference into the chat where the drag started."
+            : "The composer is busy; try again once it is ready.",
       });
     },
   });

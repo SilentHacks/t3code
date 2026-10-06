@@ -5,6 +5,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canSnooze,
+  canSettleAndStartNewThread,
+  runSettleAndNewThread,
   effectiveSnoozed,
   hasQueuedTurnStart,
   resolveSnoozePresets,
@@ -18,6 +20,141 @@ const NOW = "2026-04-10T12:00:00.000Z";
 const SNOOZED_AT = "2026-04-10T09:00:00.000Z";
 const FUTURE_WAKE = "2026-04-11T09:00:00.000Z";
 const PAST_WAKE = "2026-04-10T10:00:00.000Z";
+
+describe("settle and start new thread", () => {
+  function scenario(overrides: Partial<Parameters<typeof runSettleAndNewThread>[0]> = {}) {
+    const events: string[] = [];
+    const input = {
+      threadKey: "remote:thread",
+      supportsSettlement: true,
+      canSettle: true,
+      alreadySettled: false,
+      isCurrent: () => true,
+      settle: async () => {
+        events.push("settle");
+      },
+      startNewThread: async () => {
+        events.push("new");
+      },
+      ...overrides,
+    };
+    return { input, events };
+  }
+
+  it("awaits settlement before opening a draft and ignores duplicate invocations", async () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const { input, events } = scenario({
+      settle: async () => {
+        await promise;
+        events.push("settled");
+      },
+    });
+    const pending = runSettleAndNewThread(input);
+    expect(events).toEqual([]);
+    expect(await runSettleAndNewThread(input)).toEqual({ status: "busy" });
+    resolve();
+    expect(await pending).toEqual({ status: "started" });
+    expect(events).toEqual(["settled", "new"]);
+  });
+
+  it.each([
+    [{ supportsSettlement: false }, "unsupported"],
+    [{ canSettle: false }, "blocked"],
+    [{ isCurrent: () => false }, "stale"],
+  ] as const)("does nothing when the precondition yields %s", async (override, status) => {
+    const { input, events } = scenario(override);
+    expect(await runSettleAndNewThread(input)).toEqual({ status });
+    expect(events).toEqual([]);
+  });
+
+  it("stays on the thread after settlement failure and permits a later retry", async () => {
+    const error = new Error("Pending approval");
+    const { input, events } = scenario({
+      settle: async () => {
+        throw error;
+      },
+    });
+    expect(await runSettleAndNewThread(input)).toEqual({ status: "settle-failed", error });
+    expect(events).toEqual([]);
+    expect(await runSettleAndNewThread({ ...input, settle: async () => {} })).toEqual({
+      status: "started",
+    });
+  });
+
+  it("keeps settlement committed when navigation fails", async () => {
+    const error = new Error("Draft creation failed");
+    const { input, events } = scenario({
+      startNewThread: async () => {
+        throw error;
+      },
+    });
+    expect(await runSettleAndNewThread(input)).toEqual({ status: "new-thread-failed", error });
+    expect(events).toEqual(["settle"]);
+  });
+
+  it("does not navigate after the user changes route during settlement", async () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    let current = true;
+    const { input, events } = scenario({ settle: () => promise, isCurrent: () => current });
+    const pending = runSettleAndNewThread(input);
+    current = false;
+    resolve();
+    expect(await pending).toEqual({ status: "stale" });
+    expect(events).toEqual([]);
+  });
+
+  it("does not re-settle an explicitly settled thread or create a redundant undo", async () => {
+    const { input, events } = scenario({ alreadySettled: true });
+    expect(await runSettleAndNewThread(input)).toEqual({ status: "started" });
+    expect(events).toEqual(["new"]);
+  });
+
+  it("recognizes a draft operation superseded by navigation", async () => {
+    const { input } = scenario({ startNewThread: async () => false });
+    expect(await runSettleAndNewThread(input)).toEqual({ status: "stale" });
+  });
+
+  it("keeps single-flight scoped to the environment, not a raw thread id", async () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const { input } = scenario({ settle: () => promise });
+    const pending = runSettleAndNewThread(input);
+    expect(
+      await runSettleAndNewThread({ ...input, threadKey: "other:thread", settle: async () => {} }),
+    ).toEqual({ status: "started" });
+    resolve();
+    await pending;
+  });
+
+  it.each(["preparing", "queued", "starting", "running", "waiting"])(
+    "rejects %s work without aborting it",
+    (status) => {
+      const shell = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: { status } };
+      expect(canSettleAndStartNewThread(shell, { now: NOW })).toBe(false);
+      expect(
+        canSettleAndStartNewThread(
+          { ...shell, runtime: null, latestRun: { status } },
+          { now: NOW },
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("rejects approvals and user-input requests but permits idle and completed threads", () => {
+    const shell = {
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      runtime: { status: "idle" },
+      latestRun: { status: "completed" },
+    };
+    expect(canSettleAndStartNewThread(shell, { now: NOW })).toBe(true);
+    expect(canSettleAndStartNewThread({ ...shell, hasPendingApprovals: true }, { now: NOW })).toBe(
+      false,
+    );
+    expect(canSettleAndStartNewThread({ ...shell, hasPendingUserInput: true }, { now: NOW })).toBe(
+      false,
+    );
+  });
+});
 
 function localDate(year: number, month: number, day: number, hour: number, minute = 0): Date {
   return new Date(year, month - 1, day, hour, minute, 0, 0);

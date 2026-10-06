@@ -1352,6 +1352,28 @@ describe("composer and pull request shortcuts", () => {
     },
   );
 
+  it.each(["MacIntel", "Win32", "Linux"])(
+    "settles and starts a new thread without colliding with existing shortcuts on %s",
+    (platform) => {
+      const input = event({
+        key: "n",
+        altKey: true,
+        shiftKey: true,
+        metaKey: platform === "MacIntel",
+        ctrlKey: platform !== "MacIntel",
+      });
+      assert.strictEqual(
+        resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, { platform }),
+        "thread.settleAndNew",
+      );
+      assert.isNull(
+        resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { terminalFocus: true },
+        }),
+      );
+    },
+  );
   for (const platform of ["MacIntel", "Win32", "Linux"]) {
     it.each([
       ["s", "thread.settle"],

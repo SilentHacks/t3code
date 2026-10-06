@@ -39,6 +39,20 @@ function allIds(state: ThreadActionMenuState): string[] {
 }
 
 describe("buildThreadActionMenuItems", () => {
+  it("offers settle-and-new only on supporting servers and disables active or blocked work", () => {
+    const find = (state: ThreadActionMenuState) =>
+      buildThreadActionMenuItems(state).find((item) => item.id === "settle-and-new");
+    expect(find(baseState)).toMatchObject({
+      label: "Settle and start new thread",
+      disabled: false,
+    });
+    expect(find({ ...baseState, isRunning: true })?.disabled).toBe(true);
+    expect(find({ ...baseState, canSnoozeNow: false })?.disabled).toBe(true);
+    expect(
+      find({ ...baseState, supports: { ...baseState.supports, settlement: false } }),
+    ).toBeUndefined();
+    expect(find({ ...baseState, isSettled: true })).toBeDefined();
+  });
   it("hides lifecycle items when the environment lacks the capabilities", () => {
     expect(
       ids({

@@ -1,5 +1,6 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import * as Cause from "effect/Cause";
 
 import { useThreadActions } from "./useThreadActions";
 import { threadEnvironment } from "../state/threads";
@@ -7,6 +8,7 @@ import { toastManager } from "../components/ui/toast";
 import { useThreadUndoNotice } from "./showThreadUndoNotice";
 
 const commands = vi.hoisted(() => ({
+  newThread: vi.fn(),
   pin: vi.fn(),
   unpin: vi.fn(),
   archive: vi.fn(),
@@ -18,7 +20,10 @@ const commands = vi.hoisted(() => ({
 }));
 const router = vi.hoisted(() => ({
   navigate: vi.fn(async () => {}),
-  state: { matches: [{ params: {} as Record<string, string> }] },
+  state: {
+    location: { href: "/undo-env/thread" },
+    matches: [{ params: {} as Record<string, string> }],
+  },
 }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
@@ -28,7 +33,7 @@ vi.mock("react", async (original) => ({
 }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => router }));
 vi.mock("./useSettings", () => ({ useClientSettings: () => false }));
-vi.mock("./useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
+vi.mock("./useHandleNewThread", () => ({ useNewThreadHandler: () => commands.newThread }));
 vi.mock("../composerDraftStore", () => ({ useComposerDraftStore: () => vi.fn() }));
 vi.mock("../terminalUiStateStore", () => ({ useTerminalUiStateStore: () => vi.fn() }));
 vi.mock("../uiStateStore", () => ({ useUiStateStore: () => vi.fn() }));
@@ -41,12 +46,17 @@ const threadShell = vi.hoisted(() => ({
   projectId: "project",
   environmentId: "undo-env",
   session: null,
+  runtime: null as { status: string } | null,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  settledOverride: null as "settled" | null,
+  supportsSettlement: true,
 }));
 vi.mock("../state/entities", async (original) => ({
   ...(await original<typeof import("../state/entities")>()),
   readEnvironmentSupportsPinning: () => true,
   readEnvironmentSupportsPinReorder: () => true,
-  readEnvironmentSupportsSettlement: () => true,
+  readEnvironmentSupportsSettlement: () => threadShell.supportsSettlement,
   readEnvironmentSupportsSnooze: () => true,
   readThreadShell: () => threadShell,
 }));
@@ -85,6 +95,14 @@ function currentUndo() {
   return notice!.undo;
 }
 
+function pendingSettlement() {
+  let resolve!: (result: { _tag: "Success"; value: undefined }) => void;
+  const promise = new Promise<{ _tag: "Success"; value: undefined }>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   for (const command of Object.values(commands)) {
@@ -94,6 +112,13 @@ beforeEach(() => {
   router.state.matches[0]!.params = {};
   threadShell.pinnedAt = null;
   threadShell.snoozedUntil = null;
+  threadShell.runtime = null;
+  threadShell.hasPendingApprovals = false;
+  threadShell.hasPendingUserInput = false;
+  threadShell.settledOverride = null;
+  threadShell.supportsSettlement = true;
+  router.state.location = { href: "/undo-env/thread" };
+  commands.newThread.mockResolvedValue({ draftId: "new-draft", threadId: "new-thread" });
 });
 afterEach(() => {
   vi.runAllTimers();
@@ -164,6 +189,83 @@ describe("archive Undo", () => {
 });
 
 describe("settle and snooze Undo", () => {
+  it("opens the same environment/project with normal defaults and keeps settlement undoable", async () => {
+    threadShell.pinnedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntil = "2030-01-01T09:00:00.000Z";
+    await useThreadActions().settleAndNewThread(target);
+    expect(commands.settle).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId },
+    });
+    expect(commands.newThread).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      projectId: threadShell.projectId,
+    });
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledOnce();
+    expect(commands.pin).toHaveBeenCalledOnce();
+    expect(commands.snooze).toHaveBeenCalledOnce();
+  });
+
+  it("reports settlement failure without opening a new thread", async () => {
+    commands.settle.mockResolvedValue({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Server rejected settlement")),
+    });
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().settleAndNewThread(target);
+    expect(commands.newThread).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({ description: "Server rejected settlement" }),
+    );
+  });
+
+  it("reports new-draft failure while leaving settlement undoable", async () => {
+    commands.newThread.mockRejectedValue(new Error("Navigation failed"));
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().settleAndNewThread(target);
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Thread settled, but failed to open a new thread" }),
+    );
+    expect(commands.unsettle).not.toHaveBeenCalled();
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledOnce();
+  });
+
+  it("prevents duplicate actions across header and shortcut hook instances", async () => {
+    const { promise, resolve } = pendingSettlement();
+    commands.settle.mockReturnValue(promise);
+    const pending = useThreadActions().settleAndNewThread(target);
+    await useThreadActions().settleAndNewThread(target);
+    expect(commands.settle).toHaveBeenCalledOnce();
+    resolve({ _tag: "Success", value: undefined });
+    await pending;
+    expect(commands.newThread).toHaveBeenCalledOnce();
+  });
+
+  it("does not steal navigation after leaving and returning to the same route", async () => {
+    const { promise, resolve } = pendingSettlement();
+    commands.settle.mockReturnValue(promise);
+    const pending = useThreadActions().settleAndNewThread(target);
+    router.state.location = { href: "/undo-env/thread" };
+    resolve({ _tag: "Success", value: undefined });
+    await pending;
+    expect(commands.newThread).not.toHaveBeenCalled();
+  });
+
+  it("never degrades unsupported or blocked settlement into new-thread-only behavior", async () => {
+    const actions = useThreadActions();
+    threadShell.supportsSettlement = false;
+    await actions.settleAndNewThread(target);
+    threadShell.supportsSettlement = true;
+    threadShell.hasPendingApprovals = true;
+    await actions.settleAndNewThread(target);
+    threadShell.hasPendingApprovals = false;
+    threadShell.runtime = { status: "running" };
+    await actions.settleAndNewThread(target);
+    expect(commands.settle).not.toHaveBeenCalled();
+    expect(commands.newThread).not.toHaveBeenCalled();
+  });
   it("un-settles from the notice and expires the Undo after a manual un-settle", async () => {
     const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
     const actions = useThreadActions();

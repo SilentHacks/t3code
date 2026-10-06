@@ -5,7 +5,12 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  canSettleAndStartNewThread,
+  threadWokeAt,
+  runSettleAndNewThread,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
@@ -957,6 +962,54 @@ export function useThreadActions() {
     [confirmThreadDelete, deleteThread, resolveThreadTarget],
   );
 
+  const settleAndNewThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return;
+      const location = router.state.location;
+      const { thread } = resolved;
+      const result = await runSettleAndNewThread({
+        threadKey: scopedThreadKey(target),
+        supportsSettlement: readEnvironmentSupportsSettlement(target.environmentId),
+        canSettle: canSettleAndStartNewThread(thread, { now: new Date().toISOString() }),
+        alreadySettled: thread.settledOverride === "settled",
+        isCurrent: () => router.state.location === location,
+        settle: async () => {
+          const settled = await settleThread(target);
+          if (settled._tag !== "Success") throw squashAtomCommandFailure(settled);
+        },
+        startNewThread: async () => {
+          return (
+            (await handleNewThreadRef.current(
+              scopeProjectRef(target.environmentId, thread.projectId),
+            )) !== null
+          );
+        },
+      });
+      if (result.status === "busy" || result.status === "stale" || result.status === "started")
+        return;
+      const description =
+        result.status === "unsupported"
+          ? "Update this environment's server to use settlement."
+          : result.status === "blocked"
+            ? "Finish the active run and resolve pending requests before settling."
+            : "error" in result && result.error instanceof Error
+              ? result.error.message
+              : "An error occurred.";
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title:
+            result.status === "new-thread-failed"
+              ? "Thread settled, but failed to open a new thread"
+              : "Failed to settle and start a new thread",
+          description,
+        }),
+      );
+    },
+    [resolveThreadTarget, router, settleThread],
+  );
+
   return useMemo(
     () => ({
       archiveThread,
@@ -964,6 +1017,7 @@ export function useThreadActions() {
       deleteThread,
       confirmAndDeleteThread,
       settleThread,
+      settleAndNewThread,
       unsettleThread,
       snoozeThread,
       unsnoozeThread,
@@ -986,6 +1040,7 @@ export function useThreadActions() {
       reorderActiveThread,
       setThreadAutoSettle,
       settleThread,
+      settleAndNewThread,
       snoozeThread,
       unarchiveThread,
       unpinThread,

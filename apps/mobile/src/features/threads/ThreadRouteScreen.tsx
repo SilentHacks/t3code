@@ -1,4 +1,10 @@
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import {
+  canSettleAndStartNewThread,
+  runSettleAndNewThread,
+} from "@t3tools/client-runtime/state/thread-settled";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { useServerConfigs } from "../../state/entities";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
 import { useWorktreeSetup } from "./use-worktree-setup";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -183,6 +189,24 @@ function ThreadHeader(
               }
         }
         actions={androidHeaderActions}
+        menus={
+          props.onSettleAndNewThread
+            ? [
+                {
+                  title: "Thread actions",
+                  icon: "ellipsis",
+                  items: [
+                    {
+                      id: "settle-and-new",
+                      title: "Settle and start new thread",
+                      icon: "square.and.pencil",
+                      onPress: props.onSettleAndNewThread,
+                    },
+                  ],
+                },
+              ]
+            : undefined
+        }
         hideBottomBorder
       />
       {native.fallback}
@@ -367,6 +391,59 @@ function ThreadRouteContent(
   }, [loadEarlierHistory, selectedThread, selectedThreadDetailState.history]);
   const navigation = useNavigation();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack, "merge thread back");
+  const settleThread = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
+  const serverConfigs = useServerConfigs();
+  const latestThreadRef = useRef(selectedThread);
+  useEffect(() => {
+    latestThreadRef.current = selectedThread;
+  }, [selectedThread]);
+  const handleSettleAndNewThread = useCallback(async () => {
+    const thread = latestThreadRef.current;
+    if (!thread || selectedThreadCreation !== null) return;
+    const state = navigation.getState();
+    const result = await runSettleAndNewThread({
+      threadKey: scopedThreadKey(thread.environmentId, thread.id),
+      supportsSettlement:
+        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true,
+      canSettle: canSettleAndStartNewThread(thread, { now: new Date().toISOString() }),
+      alreadySettled: thread.settledOverride === "settled",
+      isCurrent: () =>
+        navigation.isFocused() &&
+        navigation.getState() === state &&
+        latestThreadRef.current?.id === thread.id &&
+        latestThreadRef.current.environmentId === thread.environmentId,
+      settle: async () => {
+        const settled = await settleThread({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id },
+        });
+        if (settled._tag !== "Success") throw squashAtomCommandFailure(settled);
+      },
+      startNewThread: async () => {
+        navigation.navigate("NewTaskSheet", {
+          screen: "NewTaskDraft",
+          params: {
+            environmentId: thread.environmentId,
+            projectId: thread.projectId,
+          },
+        });
+      },
+    });
+    if (result.status === "started" || result.status === "stale" || result.status === "busy")
+      return;
+    Alert.alert(
+      result.status === "new-thread-failed"
+        ? "Thread settled, but couldn't open a new thread"
+        : "Couldn't settle and start a new thread",
+      result.status === "unsupported"
+        ? "Update this environment's server to use settlement."
+        : result.status === "blocked"
+          ? "Finish the active run and resolve pending requests before settling."
+          : "error" in result && result.error instanceof Error
+            ? result.error.message
+            : "An error occurred.",
+    );
+  }, [navigation, selectedThreadCreation, serverConfigs, settleThread]);
   const mergeBackTargetThreadId = resolveMergeBackTargetThreadId(selectedThreadDetail);
   const mergeBackRun =
     selectedThreadDetail === null ? null : resolveLatestMergeBackRun(selectedThreadDetail);
@@ -1098,6 +1175,13 @@ function ThreadRouteContent(
         onOpenGitInspector={handleOpenGitInspector}
         onOpenFilesInspector={handleOpenFilesInspector}
         onReturnToThread={props.onReturnToThread}
+        onSettleAndNewThread={
+          selectedThreadCreation === null &&
+          serverConfigs.get(selectedThread.environmentId)?.environment.capabilities
+            .threadSettlement === true
+            ? () => void handleSettleAndNewThread()
+            : undefined
+        }
       />
 
       {renderThreadRouteBody()}

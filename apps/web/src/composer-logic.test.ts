@@ -805,6 +805,10 @@ describe("isCollapsedCursorAdjacentToInlineToken", () => {
 });
 
 describe("parseStandaloneComposerSlashCommand", () => {
+  it("leaves provider-native clear commands out of local thread lifecycle handling", () => {
+    expect(parseStandaloneComposerSlashCommand("/clear")).toBeNull();
+    expect(parseStandaloneComposerSlashCommand("/clear context")).toBeNull();
+  });
   it("parses standalone /plan command", () => {
     expect(parseStandaloneComposerSlashCommand(" /plan ")).toBe("plan");
   });

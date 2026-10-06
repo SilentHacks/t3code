@@ -2,10 +2,30 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 
 /**
  * Drag payload type carrying a serialized composer mention. Set on drags that
- * start in the workspace file tree so the composer can tell them apart from
+ * start in the workspace file tree or file tabs so the composer can tell them apart from
  * OS file drags and plain text selections.
  */
 export const COMPOSER_MENTION_DRAG_TYPE = "application/x-t3code-composer-mention";
+export const COMPOSER_MENTION_SOURCE_TYPE = "application/x-t3code-composer-mention-source";
+
+export function composerMentionFromFileTab(surface: {
+  kind: string;
+  relativePath?: string;
+  attachment?: unknown;
+}): string | null {
+  return surface.kind === "file" && surface.attachment === undefined && surface.relativePath
+    ? serializeComposerFileLink(surface.relativePath)
+    : null;
+}
+
+export function writeComposerMentionDrag(
+  transfer: { setData(format: string, data: string): void },
+  mentions: ReadonlyArray<string>,
+  sourceKey?: string,
+): void {
+  transfer.setData(COMPOSER_MENTION_DRAG_TYPE, mentions.join(" "));
+  if (sourceKey !== undefined) transfer.setData(COMPOSER_MENTION_SOURCE_TYPE, sourceKey);
+}
 
 export function composerMentionFromTreePath(treePath: string): string | null {
   const relativePath = treePath.replace(/\/+$/, "");
@@ -23,6 +43,7 @@ export interface ComposerMentionDragTransfer {
   readonly types: ReadonlyArray<string>;
   getData(format: string): string;
   dropEffect: string;
+  readonly effectAllowed?: string;
 }
 
 export interface ComposerMentionDragEvent {
@@ -40,9 +61,10 @@ export interface ComposerMentionDragEvent {
  * the next frame, after the editor has caught up.
  */
 export interface ComposerMentionDropHost {
+  readonly sourceKey?: string;
   insertMentionAtEnd(text: string): boolean;
   setDragActive(active: boolean): void;
-  onInsertRejected(): void;
+  onInsertRejected(reason: "busy" | "scope-mismatch"): void;
 }
 
 export interface ComposerMentionDragHandlers {
@@ -76,9 +98,8 @@ export function makeComposerMentionDragHandlers(
       if (!claim(event)) {
         return;
       }
-      // The tree constrains its drags to effectAllowed "move"; naming any
-      // other effect makes the browser cancel the drop without firing it.
-      event.dataTransfer.dropEffect = "move";
+      // The tree allows move only; file tabs copy references without removing the tab.
+      event.dataTransfer.dropEffect = event.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
       host.setDragActive(true);
     },
     onDrop(event) {
@@ -86,12 +107,17 @@ export function makeComposerMentionDragHandlers(
         return;
       }
       host.setDragActive(false);
+      const sourceKey = event.dataTransfer.getData(COMPOSER_MENTION_SOURCE_TYPE);
+      if (sourceKey && sourceKey !== host.sourceKey) {
+        host.onInsertRejected("scope-mismatch");
+        return;
+      }
       const mention = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_TYPE);
       if (mention.length === 0) {
         return;
       }
       if (!host.insertMentionAtEnd(`${mention} `)) {
-        host.onInsertRejected();
+        host.onInsertRejected("busy");
       }
     },
   };

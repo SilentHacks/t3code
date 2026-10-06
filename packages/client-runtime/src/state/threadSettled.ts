@@ -39,6 +39,47 @@ interface QueuedThreadShell {
 export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
+const settlingAndStarting = new Set<string>();
+
+export type SettleAndNewThreadResult =
+  | { readonly status: "started" | "busy" | "unsupported" | "blocked" | "stale" }
+  | { readonly status: "settle-failed" | "new-thread-failed"; readonly error: unknown };
+
+/** Settlement commits before navigation; a route change never steals the user's new destination. */
+export async function runSettleAndNewThread(input: {
+  readonly threadKey: string;
+  readonly supportsSettlement: boolean;
+  readonly canSettle: boolean;
+  readonly alreadySettled: boolean;
+  readonly isCurrent: () => boolean;
+  readonly settle: () => Promise<void>;
+  readonly startNewThread: () => Promise<boolean | void>;
+}): Promise<SettleAndNewThreadResult> {
+  if (settlingAndStarting.has(input.threadKey)) return { status: "busy" };
+  if (!input.supportsSettlement) return { status: "unsupported" };
+  if (!input.canSettle) return { status: "blocked" };
+  if (!input.isCurrent()) return { status: "stale" };
+  settlingAndStarting.add(input.threadKey);
+  try {
+    if (!input.alreadySettled) {
+      try {
+        await input.settle();
+      } catch (error) {
+        return { status: "settle-failed", error };
+      }
+    }
+    if (!input.isCurrent()) return { status: "stale" };
+    try {
+      if ((await input.startNewThread()) === false) return { status: "stale" };
+      return { status: "started" };
+    } catch (error) {
+      return { status: "new-thread-failed", error };
+    }
+  } finally {
+    settlingAndStarting.delete(input.threadKey);
+  }
+}
+
 /**
  * A user message no turn has picked up yet: the turn.start command was
  * dispatched (message-sent + turn-start-requested) but no session has
@@ -150,6 +191,28 @@ export function canSnooze(
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
   if (hasQueuedTurnStart(shell, options)) return false;
   return true;
+}
+
+export function canSettleAndStartNewThread(
+  shell: ThreadSnoozeShell,
+  options: { readonly now: string },
+): boolean {
+  const runtime = shell.runtime ?? shell.session;
+  const run = shell.latestRun ?? shell.latestTurn;
+  const activeStatuses = new Set([
+    "preparing",
+    "queued",
+    "starting",
+    "running",
+    "waiting",
+    "working",
+    "blocked",
+  ]);
+  return (
+    canSnooze(shell, options) &&
+    !activeStatuses.has(runtime?.status ?? "") &&
+    !activeStatuses.has(run?.status ?? run?.state ?? "")
+  );
 }
 
 /**

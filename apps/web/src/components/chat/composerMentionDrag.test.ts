@@ -2,6 +2,9 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   COMPOSER_MENTION_DRAG_TYPE,
+  COMPOSER_MENTION_SOURCE_TYPE,
+  composerMentionFromFileTab,
+  writeComposerMentionDrag,
   type ComposerMentionDropHost,
   composerMentionFromTreePath,
   dataTransferHasComposerMention,
@@ -34,7 +37,7 @@ const makeHost = (insertResult = true) => {
       return insertResult;
     },
     setDragActive: (active) => void log.push(`active:${active}`),
-    onInsertRejected: () => void log.push("rejected"),
+    onInsertRejected: (reason) => void log.push(`rejected:${reason}`),
   };
   return { host, log };
 };
@@ -65,6 +68,42 @@ describe("dataTransferHasComposerMention", () => {
 });
 
 describe("makeComposerMentionDragHandlers", () => {
+  it("copies a scoped file-tab reference without moving the source tab", () => {
+    const data = new Map<string, string>();
+    const transfer = {
+      types: [COMPOSER_MENTION_DRAG_TYPE, COMPOSER_MENTION_SOURCE_TYPE],
+      effectAllowed: "copy",
+      dropEffect: "none",
+      setData: (format: string, value: string) => void data.set(format, value),
+      getData: (format: string) => data.get(format) ?? "",
+    };
+    const mention = composerMentionFromFileTab({
+      kind: "file",
+      relativePath: "docs/日本語 notes.md",
+    });
+    expect(mention).toBe(composerMentionFromTreePath("docs/日本語 notes.md"));
+    writeComposerMentionDrag(transfer, [mention!], "env:thread");
+    const { host, log } = makeHost();
+    const handlers = makeComposerMentionDragHandlers({ ...host, sourceKey: "env:thread" });
+    const { event } = makeDragEvent();
+    const tabEvent = { ...event, dataTransfer: transfer };
+    handlers.onDragOver(tabEvent);
+    expect(transfer.dropEffect).toBe("copy");
+    handlers.onDrop(tabEvent);
+    expect(log).toContain(`insert:${mention} `);
+    log.length = 0;
+    makeComposerMentionDragHandlers({ ...host, sourceKey: "other:thread" }).onDrop(tabEvent);
+    expect(log).toEqual(["active:false", "rejected:scope-mismatch"]);
+  });
+
+  it("does not turn attachments or non-file tabs into workspace references", () => {
+    expect(
+      composerMentionFromFileTab({ kind: "file", relativePath: "image.png", attachment: {} }),
+    ).toBeNull();
+    expect(composerMentionFromFileTab({ kind: "preview" })).toBeNull();
+    expect(composerMentionFromFileTab({ kind: "terminal" })).toBeNull();
+    expect(composerMentionFromFileTab({ kind: "diff" })).toBeNull();
+  });
   it("leaves drags without the mention payload alone", () => {
     const { host, log } = makeHost();
     const handlers = makeComposerMentionDragHandlers(host);
@@ -111,7 +150,7 @@ describe("makeComposerMentionDragHandlers", () => {
     const { host, log } = makeHost(false);
     const handlers = makeComposerMentionDragHandlers(host);
     handlers.onDrop(makeDragEvent().event);
-    expect(log).toContain("rejected");
+    expect(log).toContain("rejected:busy");
   });
 
   it("ignores a drop whose payload is empty", () => {

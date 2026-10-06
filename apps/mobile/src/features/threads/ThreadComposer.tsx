@@ -782,7 +782,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </View>
         ) : null}
 
-        {selectedProviderStatus?.compatibilityAdvisory?.message &&
+        {selectedProviderStatus?.driver !== "opencode" &&
+        selectedProviderStatus?.compatibilityAdvisory?.message &&
         (selectedProviderStatus.compatibilityAdvisory.status === "unsupported" ||
           selectedProviderStatus.compatibilityAdvisory.status === "broken") ? (
           <Text

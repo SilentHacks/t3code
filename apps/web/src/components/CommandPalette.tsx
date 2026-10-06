@@ -83,6 +83,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useThreadActions } from "../hooks/useThreadActions";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useClientSettings } from "../hooks/useSettings";
@@ -739,6 +740,7 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const { settleAndNewThread } = useThreadActions();
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -1879,6 +1881,20 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  if (
+    activeThread &&
+    activeThreadServerConfig?.environment.capabilities.threadSettlement === true
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:settle-and-new-thread",
+      searchTerms: ["settle", "clear", "fresh", "new thread"],
+      title: "Settle and start new thread",
+      icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "thread.settleAndNew",
+      run: () => settleAndNewThread(scopeThreadRef(activeThread.environmentId, activeThread.id)),
+    });
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

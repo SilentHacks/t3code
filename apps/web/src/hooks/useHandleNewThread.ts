@@ -90,8 +90,11 @@ export function useNewThreadHandler() {
         setLogicalProjectDraftThreadId,
         setModelSelection,
       } = useComposerDraftStore.getState();
-      const requestingRouteHref = router.state.location.href;
-      const routeChangedSinceRequest = () => router.state.location.href !== requestingRouteHref;
+      const requestingLocation = router.state.location;
+      const requestingHref = requestingLocation.href;
+      const routeChangedSinceRequest = () =>
+        router.state.location !== requestingLocation ||
+        router.state.location.href !== requestingHref;
       const currentRouteTarget = getCurrentRouteTarget();
       // A new thread carries the user's working mode from the thread being
       // viewed. The target project's configured model still wins; interaction

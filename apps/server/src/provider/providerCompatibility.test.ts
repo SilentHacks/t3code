@@ -54,10 +54,26 @@ const provider: ServerProvider = {
 const V2_RELEASE = "0.0.46";
 
 describe("provider compatibility", () => {
-  it("bundles a compatibility policy for every built-in harness", () => {
+  it("uses the V2 adapter baseline for this fork's older preview release numbers", () => {
+    const opencode = ProviderDriverKind.make("opencode");
+    const policies = ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility;
+    assert.strictEqual(
+      resolveProviderCompatibility(policies, opencode, "2.0.18")?.status,
+      "supported",
+    );
+    assert.strictEqual(
+      resolveProviderCompatibility(policies, opencode, "2.0.17")?.status,
+      "unsupported",
+    );
+    assert.strictEqual(
+      resolveProviderCompatibility(policies, opencode, "1.14.18")?.status,
+      "broken",
+    );
+  });
+  it("bundles a compatibility policy for every upstream versioned harness", () => {
     for (const builtIn of BUILT_IN_DRIVERS) {
-      // Registry entries are arbitrary external ACP agents, not one versioned harness.
-      if (builtIn.driverKind === "acpRegistry") continue;
+      // External ACP agents and fork-only harnesses have no upstream manifest policy.
+      if (["acpRegistry", "omp", "devin"].includes(builtIn.driverKind)) continue;
       assert.isDefined(
         resolveProviderCompatibility(
           ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,

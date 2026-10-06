@@ -18,6 +18,7 @@ export function useThreadHeaderOptions(props: {
   readonly usesNativeHeaderGlass: boolean;
   readonly gitControls: Parameters<typeof ThreadGitControls>[0];
   readonly onReturnToThread?: () => void;
+  readonly onSettleAndNewThread?: () => void;
 }) {
   const navigation = useNavigation();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
@@ -103,8 +104,29 @@ export function useThreadHeaderOptions(props: {
     // Search lives in the persistent sidebar, so the split header keeps
     // the git controls on the RIGHT (no center items — center space is
     // reserved for future breadcrumbs/status).
-    unstable_headerRightItems: () =>
-      layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems,
+    unstable_headerRightItems: () => [
+      ...(layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems),
+      ...(props.onSettleAndNewThread
+        ? [
+            {
+              type: "menu",
+              accessibilityLabel: "Thread actions",
+              icon: { name: "ellipsis", type: "sfSymbol" },
+              menu: {
+                title: "Thread actions",
+                items: [
+                  {
+                    type: "action",
+                    label: "Settle and start new thread",
+                    icon: { name: "square.and.pencil", type: "sfSymbol" },
+                    onPress: props.onSettleAndNewThread,
+                  },
+                ],
+              },
+            },
+          ]
+        : []),
+    ],
     unstable_headerSubtitle: props.usesNativeHeaderGlass ? props.subtitle : undefined,
     contentStyle: undefined,
   };

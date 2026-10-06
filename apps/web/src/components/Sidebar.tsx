@@ -2337,6 +2337,7 @@ export default function Sidebar() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
+    settleAndNewThread,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
@@ -4545,6 +4546,9 @@ export default function Sidebar() {
           case "settle":
             attemptSettle(threadRef);
             return;
+          case "settle-and-new":
+            await settleAndNewThread(threadRef);
+            return;
           case "unsettle":
             attemptUnsettle(threadRef);
             return;
@@ -4684,6 +4688,7 @@ export default function Sidebar() {
       archiveThread,
       attemptPin,
       attemptSettle,
+      settleAndNewThread,
       attemptSnooze,
       attemptUnpin,
       attemptUnsettle,

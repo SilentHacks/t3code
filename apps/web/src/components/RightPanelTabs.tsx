@@ -78,6 +78,7 @@ import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { composerMentionFromFileTab, writeComposerMentionDrag } from "./chat/composerMentionDrag";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -110,6 +111,8 @@ interface RightPanelTabsProps {
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
   onCopyFilePath: (relativePath: string) => void;
+  composerSourceKey?: string;
+  onAddFileReference?: (relativePath: string) => void;
   onAddBrowser: () => void;
   /**
    * Separate from `onAddBrowser` on purpose: that one is passed directly as a
@@ -186,6 +189,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
 type TabContextMenuAction =
   | "rename"
   | "copy-path"
+  | "add-reference"
   | "toggle-mute"
   | "close"
   | "close-others"
@@ -901,7 +905,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   };
 
   const handleTabContextMenu = useCallback(
-    async (event: ReactMouseEvent, surface: RightPanelSurface) => {
+    async (
+      event: Pick<ReactMouseEvent, "preventDefault" | "stopPropagation" | "clientX" | "clientY">,
+      surface: RightPanelSurface,
+    ) => {
       event.preventDefault();
       event.stopPropagation();
 
@@ -916,6 +923,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         items.push({ id: "rename", label: "Rename" });
       if (surface.kind === "file" && surface.attachment === undefined) {
         items.push({ id: "copy-path", label: "Copy path" });
+        if (props.onAddFileReference) {
+          items.push({ id: "add-reference", label: "Add reference to chat" });
+        }
       }
       const menuPreviewTabId = previewTabIdOf(surface, props.previewSessions);
       // Desktop overlay state only arrives once the preview manager has created
@@ -957,6 +967,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
       const action = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
       switch (action) {
+        case "add-reference":
+          if (surface.kind === "file" && surface.attachment === undefined) {
+            props.onAddFileReference?.(surface.relativePath);
+          }
+          break;
         case "rename":
           setRenamingDevice(surface.id);
           break;
@@ -1187,6 +1202,38 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         render={
                           <button
                             type="button"
+                            draggable={composerMentionFromFileTab(surface) !== null}
+                            onDragStart={(event) => {
+                              const mention = composerMentionFromFileTab(surface);
+                              if (mention === null) {
+                                event.preventDefault();
+                                return;
+                              }
+                              event.stopPropagation();
+                              event.dataTransfer.effectAllowed = "copy";
+                              writeComposerMentionDrag(
+                                event.dataTransfer,
+                                [mention],
+                                props.composerSourceKey,
+                              );
+                            }}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key !== "ContextMenu" &&
+                                !(event.shiftKey && event.key === "F10")
+                              )
+                                return;
+                              const bounds = event.currentTarget.getBoundingClientRect();
+                              void handleTabContextMenu(
+                                {
+                                  preventDefault: () => event.preventDefault(),
+                                  stopPropagation: () => event.stopPropagation(),
+                                  clientX: bounds.left,
+                                  clientY: bounds.bottom,
+                                },
+                                surface,
+                              );
+                            }}
                             onDoubleClick={() => {
                               if (surface.kind === "device" && props.onRenameDevice)
                                 setRenamingDevice(surface.id);

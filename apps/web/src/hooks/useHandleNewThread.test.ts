@@ -233,6 +233,20 @@ describe.each([
     expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
   });
 
+  it("abandons a delayed draft open after leaving and returning to the original URL", async () => {
+    testState.reset(draft);
+    const pendingOpen = useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+    const href = testState.router.state.location.href;
+    testState.router.state.location = { href };
+    testState.completeProjectFileRead(null);
+    expect(await pendingOpen).toBeNull();
+    expect(testState.router.navigate).not.toHaveBeenCalled();
+    expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "uses the target environment's start-from-origin default of %s",
     async (startFromOrigin) => {

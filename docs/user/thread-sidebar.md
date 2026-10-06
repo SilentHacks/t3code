@@ -13,6 +13,17 @@ an existing worktree, use **New thread in this worktree** from the branch toolba
 When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
 
+### Finish a task and start fresh
+
+Choose **Settle and start new thread** from the thread menu or command palette,
+or press `mod+alt+shift+n` on web and desktop. On mobile, use **Thread actions**
+in the header. It settles the current thread before opening a new draft in the
+same environment and project, using your normal branch and workspace defaults.
+Finish active work and resolve pending requests first. If settlement fails,
+you stay in the current thread. Unsent text and attachments stay with that
+thread; return to it to continue the draft. Provider commands such as `/clear`
+keep their provider-specific behavior.
+
 ### Start without a project
 
 A thread does not need a project. To start one without a project, click **or

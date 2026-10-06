@@ -6,8 +6,9 @@ import { Button, InlineButton } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-/** Unsupported and broken versions fail mid-turn, so they warn even when ready. */
+/** OpenCode version advice is Settings-only; other drivers also warn in chat. */
 function getIncompatibleVersion(status: ServerProvider) {
+  if (status.driver === "opencode") return null;
   const compatibility = status.compatibilityAdvisory;
   if (status.status === "error" && status.auth.status === "unauthenticated") return null;
   return compatibility?.status === "broken" ||
@@ -59,9 +60,10 @@ export function hasProviderSetup(status: ServerProvider): boolean {
   );
 }
 
-/** Broken-version guidance takes precedence over startup failures it can cause. */
+/** For other drivers, broken-version guidance takes precedence over startup failures. */
 export function getProviderStatusMessage(status: ServerProvider): string {
   if (
+    status.driver !== "opencode" &&
     status.auth.status !== "unauthenticated" &&
     status.compatibilityAdvisory?.status === "broken" &&
     status.compatibilityAdvisory.message
@@ -130,9 +132,9 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
               {message}
             </TooltipPopup>
           </Tooltip>
-          {onOpenProviderSetup && hasProviderSetup(status) ? (
+          {onOpenProviderSetup && (hasProviderSetup(status) || status.driver === "opencode") ? (
             <InlineButton onClick={() => onOpenProviderSetup(status.instanceId)}>
-              Open provider setup
+              {status.driver === "opencode" ? "Open provider settings" : "Open provider setup"}
             </InlineButton>
           ) : null}
         </AlertDescription>
