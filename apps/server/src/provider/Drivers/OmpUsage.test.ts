@@ -53,6 +53,10 @@ describe("OmpUsage", () => {
         });
         assert.equal(result.usageLimits.windows.length, 2);
         assert.deepEqual(
+          result.usageLimits.windows.map((window) => window.id),
+          ["openai-codex:7692c3ad3540bb80:chat:5h", "openai-codex:7692c3ad3540bb80:chat:7d"],
+        );
+        assert.deepEqual(
           result.usageLimits.windows.map((window) => window.kind),
           ["session", "weekly"],
         );

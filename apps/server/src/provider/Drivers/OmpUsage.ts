@@ -4,9 +4,10 @@ import type {
   ServerProviderUsageLimits,
   ServerProviderUsageWindow,
 } from "@t3tools/contracts";
-import * as NodeCrypto from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -91,7 +92,7 @@ function parseUsage(stdout: string, checkedAt: string): OmpUsageProbeResult {
     const provider = report.provider.trim();
     const identity = report.metadata?.accountId?.trim() || report.metadata?.email?.trim();
     const account = identity
-      ? NodeCrypto.createHash("sha256").update(identity).digest("hex").slice(0, 16)
+      ? Hex.encode(sha256(new TextEncoder().encode(identity))).slice(0, 16)
       : String(index);
     for (const raw of report.limits) {
       const decoded = decodeLimit(raw);
