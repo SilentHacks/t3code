@@ -5,7 +5,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { probeOmpUsage } from "./OmpUsage.ts";
 
 const decodeSettings = Schema.decodeEffect(OmpSettings);

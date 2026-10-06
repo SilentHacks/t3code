@@ -61,7 +61,7 @@ it.effect.each(["codex", "omp"] as const)(
           },
         }),
     });
-    const testLayer = AgentSessionImporter.layer.pipe(
+    const layerTest = AgentSessionImporter.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
@@ -145,6 +145,6 @@ it.effect.each(["codex", "omp"] as const)(
         }),
       ]);
       expect(recorded).toHaveLength(2);
-    }).pipe(Effect.provide(testLayer));
+    }).pipe(Effect.provide(layerTest));
   },
 );

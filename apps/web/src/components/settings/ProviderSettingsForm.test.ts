@@ -57,6 +57,7 @@ describe("ProviderSettingsForm helpers", () => {
     expect(acpRegistry).toBeDefined();
     expect(acpRegistry?.hasDefaultInstance).toBe(false);
     expect(deriveProviderSettingsFields(acpRegistry!).map((field) => field.key)).toEqual([
+      "source",
       "agentId",
       "commandPath",
       "authMethodId",
@@ -74,6 +75,13 @@ describe("ProviderSettingsForm helpers", () => {
     expect(
       nextProviderConfigWithFieldValue({ customModels: ["native/model"] }, profile!, "work"),
     ).toEqual({ customModels: ["native/model"], profile: "work" });
+  });
+
+  it("shows the local executable without registry identity or authentication fields", () => {
+    const acpRegistry = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("acpRegistry")];
+    expect(
+      deriveProviderSettingsFields(acpRegistry!, { source: "local" }).map((field) => field.key),
+    ).toEqual(["source", "commandPath"]);
   });
 
   it("derives a select control with its choices for the Antigravity sign-in method", () => {

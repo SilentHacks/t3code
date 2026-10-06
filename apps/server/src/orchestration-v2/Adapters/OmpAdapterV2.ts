@@ -8,8 +8,13 @@ import {
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as NodeUtil from "node:util";
-import { Crypto, Effect, FileSystem, Option, Path, Schema } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { ChildProcessSpawner } from "effect/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
@@ -18,7 +23,7 @@ import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.
 import { makeOmpAcpRuntime } from "../../provider/acp/OmpAcpSupport.ts";
 import { isManagedOmpCommand, isUnmanagedOmpPrompt } from "../../provider/Drivers/OmpCommands.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import * as ProviderEventLoggers from "../../provider/Layers/ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
 import type * as ProviderAdapter from "../ProviderAdapter.ts";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { OmpSettings } from "@t3tools/contracts";
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 import { buildOmpAcpSpawnInput, ompAcpSpawnArgs } from "./OmpAcpSupport.ts";
 

@@ -9,8 +9,14 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
-import { Crypto, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as ServerConfig from "../config.ts";
 import { makeOmpAdapterV2 } from "./Adapters/OmpAdapterV2.ts";
@@ -19,7 +25,7 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 
 const instanceId = ProviderInstanceId.make("omp");
 const settings = Schema.decodeSync(OmpSettings)({});
@@ -47,7 +53,7 @@ createInterface({input:process.stdin}).on('line', line => {
 });
 `;
 
-const registryLayer = ProviderAdapterRegistry.makeLayerEffect(
+const registryLayer = ProviderAdapterRegistry.layerFromAdaptersEffect(
   Effect.gen(function* () {
     const underlying = yield* ChildProcessSpawner.ChildProcessSpawner;
     const spawner = ChildProcessSpawner.make((command) =>
@@ -71,11 +77,9 @@ const registryLayer = ProviderAdapterRegistry.makeLayerEffect(
   }),
 ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer, configLayer)));
 
-const testLayer = makeOrchestratorV2ReplayLayerWithRegistry(
-  { name: "omp-elicitation-retry" },
-  registryLayer,
-  { runEffectWorker: false },
-);
+const layerTest = layerWithRegistry({ name: "omp-elicitation-retry" }, registryLayer, {
+  runEffectWorker: false,
+});
 
 it.live(
   "reopens a rejected OMP form durably and accepts a corrected answer through the effect worker",
@@ -201,5 +205,5 @@ it.live(
         )?.status,
         "resolved",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
