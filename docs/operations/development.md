@@ -131,7 +131,8 @@ Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](
 
 ## Desktop artifacts
 
-Local artifact builds are unsigned by default and write to `release/`:
+Local artifact builds write to `release/`. By default, macOS builds use ad-hoc
+signatures, not Developer ID signing or notarization; other platforms are unsigned:
 
 ```sh
 vp run dist:desktop:dmg

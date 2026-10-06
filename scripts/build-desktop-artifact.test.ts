@@ -634,6 +634,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(linux, "asar");
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
+      assert.strictEqual((mac.mac as Record<string, unknown>).identity, "-");
+      assert.notProperty(mac.mac as Record<string, unknown>, "sign");
       assert.deepStrictEqual(win.asar, { smartUnpack: false });
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
       assert.deepStrictEqual(winWithoutWslRuntime.asar, win.asar);
@@ -1988,6 +1990,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
+      assert.notProperty(mac, "identity");
       assert.deepStrictEqual(mac.protocols, [
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
       ]);
