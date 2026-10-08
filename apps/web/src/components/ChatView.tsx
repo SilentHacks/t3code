@@ -7986,6 +7986,7 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       if (command === "thread.settleAndNew") {
+        if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat && isServerThread && activeThreadRef)

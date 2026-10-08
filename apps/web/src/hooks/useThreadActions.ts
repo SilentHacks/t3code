@@ -1010,6 +1010,8 @@ export function useThreadActions() {
 
   const settleAndNewThread = useCallback(
     async (target: ScopedThreadRef) => {
+      const permissionFailure = threadOperationFailure(target);
+      if (permissionFailure) return;
       const resolved = resolveThreadTarget(target);
       if (!resolved) return;
       // Router loads rebuild parsed locations even when history has not moved.
@@ -1026,6 +1028,8 @@ export function useThreadActions() {
           if (settled._tag !== "Success") throw squashAtomCommandFailure(settled);
         },
         startNewThread: async () => {
+          const permissionFailure = threadOperationFailure(target);
+          if (permissionFailure) throw squashAtomCommandFailure(permissionFailure);
           return (
             (await handleNewThreadRef.current(
               scopeProjectRef(target.environmentId, thread.projectId),

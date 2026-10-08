@@ -32,10 +32,11 @@ const router = vi.hoisted(() => ({
     matches: [{ params: {} as Record<string, string> }],
   },
 }));
+const authorization = vi.hoisted(() => ({ canOperate: true }));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/session", async (original) => ({
   ...(await original<typeof import("../state/session")>()),
-  readEnvironmentScope: () => true,
+  readEnvironmentScope: () => authorization.canOperate,
 }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
@@ -119,6 +120,7 @@ function pendingSettlement() {
 }
 
 beforeEach(() => {
+  authorization.canOperate = true;
   vi.useFakeTimers();
   for (const command of Object.values(commands)) {
     command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
@@ -205,6 +207,30 @@ describe("archive Undo", () => {
 });
 
 describe("settle and snooze Undo", () => {
+  it.each([null, "settled"] as const)(
+    "does not settle or open a draft without permission (override: %s)",
+    async (settledOverride) => {
+      authorization.canOperate = false;
+      threadShell.settledOverride = settledOverride;
+      await useThreadActions().settleAndNewThread(target);
+      expect(commands.settle).not.toHaveBeenCalled();
+      expect(commands.newThread).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not open a draft if permission is revoked during settlement", async () => {
+    commands.settle.mockImplementation(async () => {
+      authorization.canOperate = false;
+      return { _tag: "Success", value: undefined };
+    });
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().settleAndNewThread(target);
+    expect(commands.newThread).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Thread settled, but failed to open a new thread" }),
+    );
+  });
+
   it("opens a new thread when a router reload refreshes the parsed location during settlement", async () => {
     const root = createRootRoute();
     const thread = createRoute({ getParentRoute: () => root, path: "/$environmentId/$threadId" });
