@@ -8,6 +8,7 @@ import {
   OpenCodeSettings,
   OmpSettings,
   PiSettings,
+  MuseSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
@@ -86,6 +87,12 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     value: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
     settingsSchema: AntigravitySettings,
+  },
+  {
+    value: ProviderDriverKind.make("muse"),
+    label: "Muse Code",
+    settingsSchema: MuseSettings,
+    badgeLabel: "Beta",
   },
   {
     value: ProviderDriverKind.make("pi"),
