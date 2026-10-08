@@ -966,14 +966,15 @@ export function useThreadActions() {
     async (target: ScopedThreadRef) => {
       const resolved = resolveThreadTarget(target);
       if (!resolved) return;
-      const location = router.state.location;
+      // Router loads rebuild parsed locations even when history has not moved.
+      const location = router.history.location;
       const { thread } = resolved;
       const result = await runSettleAndNewThread({
         threadKey: scopedThreadKey(target),
         supportsSettlement: readEnvironmentSupportsSettlement(target.environmentId),
         canSettle: canSettleAndStartNewThread(thread, { now: new Date().toISOString() }),
         alreadySettled: thread.settledOverride === "settled",
-        isCurrent: () => router.state.location === location,
+        isCurrent: () => router.history.location === location,
         settle: async () => {
           const settled = await settleThread(target);
           if (settled._tag !== "Success") throw squashAtomCommandFailure(settled);

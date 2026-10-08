@@ -1,6 +1,12 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import * as Cause from "effect/Cause";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 
 import { useThreadActions } from "./useThreadActions";
 import { threadEnvironment } from "../state/threads";
@@ -20,6 +26,7 @@ const commands = vi.hoisted(() => ({
 }));
 const router = vi.hoisted(() => ({
   navigate: vi.fn(async () => {}),
+  history: { location: { href: "/undo-env/thread" } },
   state: {
     location: { href: "/undo-env/thread" },
     matches: [{ params: {} as Record<string, string> }],
@@ -31,7 +38,10 @@ vi.mock("react", async (original) => ({
   useMemo: (create: () => unknown) => create(),
   useRef: (value: unknown) => ({ current: value }),
 }));
-vi.mock("@tanstack/react-router", () => ({ useRouter: () => router }));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useRouter: () => router,
+}));
 vi.mock("./useSettings", () => ({ useClientSettings: () => false }));
 vi.mock("./useHandleNewThread", () => ({ useNewThreadHandler: () => commands.newThread }));
 vi.mock("../composerDraftStore", () => ({ useComposerDraftStore: () => vi.fn() }));
@@ -118,6 +128,7 @@ beforeEach(() => {
   threadShell.settledOverride = null;
   threadShell.supportsSettlement = true;
   router.state.location = { href: "/undo-env/thread" };
+  router.history = createMemoryHistory({ initialEntries: ["/undo-env/thread"] });
   commands.newThread.mockResolvedValue({ draftId: "new-draft", threadId: "new-thread" });
 });
 afterEach(() => {
@@ -189,6 +200,34 @@ describe("archive Undo", () => {
 });
 
 describe("settle and snooze Undo", () => {
+  it("opens a new thread when a router reload refreshes the parsed location during settlement", async () => {
+    const root = createRootRoute();
+    const thread = createRoute({ getParentRoute: () => root, path: "/$environmentId/$threadId" });
+    const realRouter = createRouter({
+      routeTree: root.addChildren([thread]),
+      history: router.history as ReturnType<typeof createMemoryHistory>,
+    });
+    await realRouter.load();
+    router.state.location = realRouter.state.location;
+    const location = router.state.location;
+    const historyLocation = router.history.location;
+    commands.settle.mockImplementation(async () => {
+      await realRouter.load();
+      router.state.location = realRouter.state.location;
+      return { _tag: "Success", value: undefined };
+    });
+
+    await useThreadActions().settleAndNewThread(target);
+
+    expect(router.state.location).not.toBe(location);
+    expect(router.state.location.href).toBe(location.href);
+    expect(router.history.location).toBe(historyLocation);
+    expect(commands.newThread).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      projectId: threadShell.projectId,
+    });
+  });
+
   it("opens the same environment/project with normal defaults and keeps settlement undoable", async () => {
     threadShell.pinnedAt = "2026-01-01T00:00:00.000Z";
     threadShell.snoozedUntil = "2030-01-01T09:00:00.000Z";
@@ -247,7 +286,10 @@ describe("settle and snooze Undo", () => {
     const { promise, resolve } = pendingSettlement();
     commands.settle.mockReturnValue(promise);
     const pending = useThreadActions().settleAndNewThread(target);
-    router.state.location = { href: "/undo-env/thread" };
+    const history = router.history as ReturnType<typeof createMemoryHistory>;
+    history.push("/elsewhere");
+    history.back();
+    router.state.location = { href: history.location.href };
     resolve({ _tag: "Success", value: undefined });
     await pending;
     expect(commands.newThread).not.toHaveBeenCalled();

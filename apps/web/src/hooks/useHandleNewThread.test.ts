@@ -17,6 +17,7 @@ const testState = vi.hoisted(() => {
     readonly threadId: string;
   } | null = null;
   const router = {
+    history: { location: { href: "/" } },
     state: {
       location: { href: "/" },
       matches: [{ params: {} }],
@@ -60,6 +61,7 @@ const testState = vi.hoisted(() => {
         defaultRuntimeMode: "full-access",
       };
       router.state.location.href = "/";
+      router.history.location = { href: "/" };
       router.navigate.mockClear();
       draftStore.setDraftThreadContext.mockClear();
       draftStore.setLogicalProjectDraftThreadId.mockClear();
@@ -225,6 +227,7 @@ describe.each([
     );
 
     testState.router.state.location.href = "/usage";
+    testState.router.history.location = { href: "/usage" };
     testState.completeProjectFileRead(null);
     await pendingOpen;
 
@@ -241,10 +244,27 @@ describe.each([
     } as never);
     const href = testState.router.state.location.href;
     testState.router.state.location = { href };
+    testState.router.history.location = { href };
     testState.completeProjectFileRead(null);
     expect(await pendingOpen).toBeNull();
     expect(testState.router.navigate).not.toHaveBeenCalled();
     expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
+  });
+
+  it("opens a delayed draft when the parsed location refreshes without history navigation", async () => {
+    testState.reset(draft);
+    const pendingOpen = useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+    testState.router.state.location = { href: testState.router.state.location.href };
+    testState.completeProjectFileRead(null);
+
+    expect(await pendingOpen).toEqual({
+      draftId: draft?.draftId ?? "draft-delayed",
+      threadId: draft?.threadId ?? "thread-delayed",
+    });
+    expect(testState.router.navigate).toHaveBeenCalledOnce();
   });
 
   it.each([true, false])(
