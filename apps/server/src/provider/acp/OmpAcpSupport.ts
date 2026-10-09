@@ -6,7 +6,7 @@ import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 export type OmpAcpRuntimeSettings = Pick<OmpSettings, "binaryPath" | "profile">;
 

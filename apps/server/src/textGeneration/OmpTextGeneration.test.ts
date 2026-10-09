@@ -11,7 +11,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type * as AcpSchema from "effect-acp/compat";
 import { expect, vi } from "vite-plus/test";
-import { AcpSessionRuntime } from "../provider/acp/AcpSessionRuntime.ts";
+import { AcpSessionRuntime } from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { makeOmpAcpRuntime } from "../provider/acp/OmpAcpSupport.ts";
 import { makeOmpTextGeneration } from "./OmpTextGeneration.ts";
 

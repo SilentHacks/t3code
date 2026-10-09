@@ -5,7 +5,7 @@ import {
   makeManualOnlyProviderMaintenanceCapabilities,
   makeProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
-} from "../providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 import { ompProfileArgs, runOmpReadOnlyCommand } from "./OmpDiscovery.ts";
 
 const DRIVER = ProviderDriverKind.make("omp");

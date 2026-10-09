@@ -7,9 +7,8 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import * as ServerConfig from "../../config.ts";
-import * as ServerSettings from "../../serverSettings.ts";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   OmpAdapterV2Driver,
   type OmpAdapterV2DriverEnv,
@@ -22,24 +21,24 @@ import {
   enrichOmpSnapshot,
   ompModelsFromSettings,
 } from "../OmpProvider.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
-} from "../ProviderDriver.ts";
+} from "@t3tools/provider-core/server/driver";
 import {
   makeCachedProviderMaintenanceResolution,
   makeManualOnlyProviderMaintenanceCapabilities,
   resolveProviderMaintenanceCapabilitiesEffect,
-} from "../providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
+} from "@t3tools/provider-core/server/snapshotSettings";
+import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { makeOmpDiscoveryCache } from "./OmpDiscovery.ts";
 import { makeOmpMaintenanceResolver } from "./OmpMaintenance.ts";
 
@@ -48,13 +47,11 @@ const decodeSettings = Schema.decodeSync(OmpSettings);
 
 export type OmpDriverEnv =
   | OmpAdapterV2DriverEnv
-  | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ServerConfig.ServerConfig
-  | ServerSettings.ServerSettingsService;
+  | ProviderLatestVersions.ProviderLatestVersions;
 
 export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
   driverKind: DRIVER,
@@ -68,8 +65,10 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const { cwd } = yield* ServerConfig.ServerConfig;
+      const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+      const {
+        paths: { cwd },
+      } = yield* ProviderHost.ProviderHost;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const settings = { ...config, enabled };
       const continuationIdentity = defaultProviderContinuationIdentity({
@@ -117,7 +116,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         ),
       );
       const textGeneration = yield* makeOmpTextGeneration(settings, processEnv);
-      const snapshotSettings = makeProviderSnapshotSettingsSource(settings, serverSettings);
+      const snapshotSettings = yield* makeProviderSnapshotSettingsSource(settings);
       const checkProvider = Effect.gen(function* () {
         const machine = yield* checkOmpProviderStatus(settings, processEnv, cwd, cache.get).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -152,7 +151,12 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
                     publishSnapshot,
                     httpClient,
                     enableProviderUpdateChecks: current.enableProviderUpdateChecks,
-                  }),
+                  }).pipe(
+                    Effect.provideService(
+                      ProviderLatestVersions.ProviderLatestVersions,
+                      latestVersions,
+                    ),
+                  ),
                 ),
               ),
       }).pipe(

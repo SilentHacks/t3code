@@ -231,8 +231,15 @@ it.layer(NodeServices.layer)("OMP session discovery", (it) => {
         Layer.provide(
           Layer.mergeAll(
             ServerSettings.layerTest({
-              providers: { claudeAgent: { enabled: false }, codex: { enabled: false } },
               providerInstances: {
+                [ProviderInstanceId.make("claudeAgent")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  enabled: false,
+                },
+                [ProviderInstanceId.make("codex")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  enabled: false,
+                },
                 [instanceId]: {
                   driver: ProviderDriverKind.make("omp"),
                   config: { enabled: true, profile: "work" },

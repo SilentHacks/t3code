@@ -16,11 +16,9 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -28,13 +26,15 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import * as ServerConfig from "../../config.ts";
-import type * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { makeOmpAcpRuntime } from "../../provider/acp/OmpAcpSupport.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2TurnInput,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   extractOmpSubagentUpdate,
   makeOmpAcpAdapterFlavor,
@@ -119,7 +119,13 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), { prefix: "t3-omp-v2-" }).pipe(
   Layer.provide(NodeServices.layer),
 );
-const testLayer = Layer.mergeAll(NodeServices.layer, IdAllocator.layer, serverConfigLayer);
+const testLayer = Layer.mergeAll(
+  NodeServices.layer,
+  IdAllocator.layer,
+  serverConfigLayer,
+  McpProviderSessions.layer,
+  TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const settings = Schema.decodeSync(OmpSettings)({ binaryPath: "omp-test", profile: "work" });
 const instanceId = ProviderInstanceId.make("omp-test");
@@ -148,11 +154,7 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
     settings,
     environment,
     childProcessSpawner,
-    crypto: yield* Crypto.Crypto,
     selfInvocation: yield* resolveSelfInvocation(),
-    fileSystem: yield* FileSystem.FileSystem,
-    idAllocator: yield* IdAllocator.IdAllocatorV2,
-    serverConfig: yield* ServerConfig.ServerConfig,
     onAvailableCommandsUpdate: (commands) =>
       Effect.sync(() => {
         availableCommands.push(commands.map((command) => command.name));
@@ -171,7 +173,7 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
     }),
   } satisfies OmpAdapterV2Options;
   return {
-    adapter: makeOmpAdapterV2(options),
+    adapter: yield* makeOmpAdapterV2(options),
     flavor: makeOmpAcpAdapterFlavor(options),
     options,
     requests,

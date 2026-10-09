@@ -15,10 +15,7 @@ export function mobileOmpInstances(settings: ServerSettings) {
     ([, instance]) => instance.driver === "omp",
   );
   if (!Object.hasOwn(settings.providerInstances, "omp")) {
-    instances.unshift([
-      "omp",
-      { driver: ProviderDriverKind.make("omp"), config: settings.providers.omp },
-    ]);
+    instances.unshift(["omp", { driver: ProviderDriverKind.make("omp"), config: {} }]);
   }
   return instances.map(([id, instance]) => {
     let config;
@@ -44,7 +41,7 @@ export function mobileOmpSettingsPatch(
 ): ServerSettingsPatch {
   const existing = settings.providerInstances[id];
   if (existing && existing.driver !== "omp") throw new Error("Provider ID is already in use.");
-  const config = existing?.config ?? (id === "omp" ? settings.providers.omp : {});
+  const config = existing?.config ?? {};
   const current = config && typeof config === "object" && !Array.isArray(config) ? config : {};
   return {
     providerInstances: {

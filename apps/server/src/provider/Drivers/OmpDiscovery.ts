@@ -14,8 +14,8 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeBuffer from "node:buffer";
 
-import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
-import { buildSelectOptionDescriptor } from "../providerSnapshot.ts";
+import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
+import { buildSelectOptionDescriptor } from "@t3tools/provider-core/server/snapshotProbe";
 import { catalogFromCommandEntries, type OmpCommandCatalog } from "./OmpCommands.ts";
 
 const CATALOG_MAX_BYTES = 4 * 1024 * 1024;

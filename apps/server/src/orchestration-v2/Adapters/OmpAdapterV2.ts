@@ -18,26 +18,27 @@ import { ChildProcessSpawner } from "effect/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
-import * as ServerConfig from "../../config.ts";
-import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.ts";
+import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { makeOmpAcpRuntime } from "../../provider/acp/OmpAcpSupport.ts";
 import { isManagedOmpCommand, isUnmanagedOmpPrompt } from "../../provider/Drivers/OmpCommands.ts";
-import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
-import * as IdAllocator from "../IdAllocator.ts";
-import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
-import type * as ProviderAdapter from "../ProviderAdapter.ts";
-import { makeProviderFailure } from "../ProviderFailure.ts";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import type * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
-} from "../ProviderAdapterDriver.ts";
+} from "@t3tools/provider-core/server/adapterDriver";
 import {
   AcpProviderCapabilitiesV2,
   makeAcpAdapterV2,
   type AcpAdapterV2Flavor,
   type AcpAdapterV2SubagentUpdate,
-} from "./AcpAdapterV2.ts";
+} from "@t3tools/provider-acp/server/adapter";
 
 export const OMP_PROVIDER = ProviderDriverKind.make("omp");
 export const OMP_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OMP_PROVIDER);
@@ -69,11 +70,7 @@ export interface OmpAdapterV2Options {
   readonly settings: OmpSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
-  readonly crypto: Parameters<typeof makeAcpAdapterV2>[0]["crypto"];
   readonly selfInvocation: Parameters<typeof makeAcpAdapterV2>[0]["selfInvocation"];
-  readonly fileSystem: Parameters<typeof makeAcpAdapterV2>[0]["fileSystem"];
-  readonly idAllocator: Parameters<typeof makeAcpAdapterV2>[0]["idAllocator"];
-  readonly serverConfig: Parameters<typeof makeAcpAdapterV2>[0]["serverConfig"];
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
   readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
@@ -266,10 +263,6 @@ export function makeOmpAdapterV2(options: OmpAdapterV2Options) {
   return makeAcpAdapterV2({
     instanceId: options.instanceId,
     flavor: makeOmpAcpAdapterFlavor(options),
-    crypto: options.crypto,
-    fileSystem: options.fileSystem,
-    idAllocator: options.idAllocator,
-    serverConfig: options.serverConfig,
     selfInvocation: options.selfInvocation,
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
     ...(options.continuationRequests === undefined
@@ -285,8 +278,9 @@ export type OmpAdapterV2DriverEnv =
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path
-  | ProviderEventLoggers.ProviderEventLoggers
-  | ServerConfig.ServerConfig;
+  | ProviderHost.ProviderHost
+  | McpProviderSessions.McpProviderSessions
+  | ProviderEventLoggers.ProviderEventLoggers;
 
 export const OmpAdapterV2Driver: ProviderAdapterDriver<OmpSettings, OmpAdapterV2DriverEnv> = {
   driverKind: OMP_PROVIDER,
@@ -298,23 +292,15 @@ export const OmpAdapterV2Driver: ProviderAdapterDriver<OmpSettings, OmpAdapterV2
       const environment = yield* HostProcessEnvironment;
       const selfInvocation = yield* resolveSelfInvocation();
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const crypto = yield* Crypto.Crypto;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
-      const serverConfig = yield* ServerConfig.ServerConfig;
       const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
-      return makeOmpAdapterV2({
+      return yield* makeOmpAdapterV2({
         instanceId: input.instanceId,
         settings: { ...settings, enabled: input.enabled },
         environment: mergeProviderInstanceEnvironment(input.environment, environment),
         selfInvocation,
         childProcessSpawner,
-        crypto,
-        fileSystem,
-        idAllocator,
-        serverConfig,
         continuationRequests,
         nativeLogging: (threadId) =>
           makeNativeLogger({

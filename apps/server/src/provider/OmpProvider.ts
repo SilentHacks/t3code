@@ -22,11 +22,11 @@ import {
   parseGenericCliVersion,
   providerModelsFromSettings,
   type ProviderProbeResult,
-} from "./providerSnapshot.ts";
+} from "@t3tools/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
-} from "./providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 
 const DRIVER = ProviderDriverKind.make("omp");
 const NO_MODELS_MESSAGE =

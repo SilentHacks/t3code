@@ -209,17 +209,6 @@ describe("custom model settings", () => {
       { slug: "named", name: "Named", capabilities },
     ]);
   });
-
-  it("accepts entries at the settings patch boundary", () => {
-    expect(
-      decodeServerSettingsPatch({
-        providers: { codex: { customModels: [{ slug: "x", capabilities }] } },
-      }).providers?.codex?.customModels,
-    ).toEqual([{ slug: "x", capabilities }]);
-    expect(() =>
-      decodeServerSettingsPatch({ providers: { codex: { customModels: [{ name: "no slug" }] } } }),
-    ).toThrow();
-  });
 });
 
 describe("OmpSettings", () => {
@@ -228,18 +217,16 @@ describe("OmpSettings", () => {
 
   it("keeps OMP opt-in for new and existing settings", () => {
     expect(decodeOmpSettings({})).toEqual(defaults);
-    expect(decodeServerSettings({}).providers.omp).toEqual(defaults);
-    expect(
-      decodeServerSettings({ providers: { codex: { enabled: false } } }).providers.omp,
-    ).toEqual(defaults);
-    expect(DEFAULT_SERVER_SETTINGS.providers.omp).toEqual(defaults);
+    expect(resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make("omp") })).toBe(false);
+    expect(decodeServerSettings({}).providerInstances).toEqual({});
+    expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
   });
 
   it.each(["", "   "])("uses the executable fallback for a blank binary path %j", (binaryPath) => {
     expect(decodeOmpSettings({ binaryPath }).binaryPath).toBe("omp");
   });
 
-  it("round-trips profile, executable and native custom model options in legacy settings", () => {
+  it("round-trips profile, executable and native custom model options in instance settings", () => {
     const customModels = [
       "vendor/model:preview",
       {
@@ -262,52 +249,44 @@ describe("OmpSettings", () => {
         },
       },
     ];
-    const decoded = decodeServerSettings({
-      providers: {
-        omp: {
-          enabled: true,
-          binaryPath: "  /opt/omp binary  ",
-          profile: "  work  ",
-          customModels,
-        },
-      },
+    const config = decodeOmpSettings({
+      enabled: true,
+      binaryPath: "  /opt/omp binary  ",
+      profile: "  work  ",
+      customModels,
     });
-    expect(decoded.providers.omp).toEqual({
+    expect(config).toEqual({
       enabled: true,
       binaryPath: "/opt/omp binary",
       profile: "work",
       customModels,
     });
-    expect(encodeServerSettings(decoded).providers?.omp).toEqual(decoded.providers.omp);
+    const omp = { driver: ProviderDriverKind.make("omp"), config };
+    const decoded = decodeServerSettings({ providerInstances: { omp } });
+    expect(decoded.providerInstances[ProviderInstanceId.make("omp")]).toEqual(omp);
+    expect(
+      encodeServerSettings(decoded).providerInstances?.[ProviderInstanceId.make("omp")],
+    ).toEqual(omp);
   });
 
-  it("accepts partial patches without inserting defaults or resetting unrelated settings", () => {
-    expect(decodeServerSettingsPatch({})).not.toHaveProperty("providers");
-    expect(decodeServerSettingsPatch({ providers: { omp: {} } })).toEqual({
-      providers: { omp: {} },
-    });
-    expect(decodeServerSettingsPatch({ providers: { omp: { profile: "  personal  " } } })).toEqual({
-      providers: { omp: { profile: "personal" } },
-    });
-    expect(
-      decodeServerSettingsPatch({
-        providers: {
-          omp: { enabled: true, binaryPath: "  omp-local  ", customModels: ["native/id"] },
-        },
-      }),
-    ).toEqual({
-      providers: { omp: { enabled: true, binaryPath: "omp-local", customModels: ["native/id"] } },
+  it("patches the OMP instance without inserting defaults or resetting unrelated settings", () => {
+    expect(decodeServerSettingsPatch({})).not.toHaveProperty("providerInstances");
+    const omp = { driver: ProviderDriverKind.make("omp"), config: { profile: "personal" } };
+    expect(decodeServerSettingsPatch({ providerInstances: { omp } })).toEqual({
+      providerInstances: { omp },
     });
   });
 
-  it("lets patches clear a profile, executable override and custom models", () => {
-    expect(
-      decodeServerSettingsPatch({
-        providers: { omp: { enabled: false, binaryPath: "  ", profile: "  ", customModels: [] } },
-      }),
-    ).toEqual({
-      providers: { omp: { enabled: false, binaryPath: "", profile: "", customModels: [] } },
+  it("lets instance patches clear profile and custom models", () => {
+    const omp = {
+      driver: ProviderDriverKind.make("omp"),
+      enabled: false,
+      config: { binaryPath: "", profile: "", customModels: [] },
+    };
+    expect(decodeServerSettingsPatch({ providerInstances: { omp } })).toEqual({
+      providerInstances: { omp },
     });
+    expect(decodeOmpSettings(omp.config)).toEqual(defaults);
   });
 
   it.each([
@@ -321,10 +300,8 @@ describe("OmpSettings", () => {
         { slug: "native/model", capabilities: { optionDescriptors: [{ type: "select" }] } },
       ],
     },
-  ])("rejects malformed OMP settings in snapshots and patches: %j", (omp) => {
+  ])("rejects malformed OMP driver configuration: %j", (omp) => {
     expect(() => decodeOmpSettings(omp)).toThrow();
-    expect(() => decodeServerSettings({ providers: { omp } })).toThrow();
-    expect(() => decodeServerSettingsPatch({ providers: { omp } })).toThrow();
   });
 
   it.each([
@@ -380,15 +357,6 @@ describe("ClaudeSettings auto-compaction", () => {
       expect(() => decodeClaudeSettings({ autoCompactWindow: value })).toThrow();
     },
   );
-
-  it("rejects an unsupported threshold at the settings patch boundary", () => {
-    expect(() =>
-      decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300k" } } }),
-    ).toThrow();
-    expect(
-      decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300000" } } }),
-    ).toBeDefined();
-  });
 });
 
 describe("ClientSettings notifications", () => {
@@ -893,9 +861,6 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("decodes a fully empty config (legacy on-disk shape) without complaint", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providerInstances).toEqual({});
-    // Legacy `providers` struct is still hydrated with its per-driver defaults
-    // so existing call sites keep working through the migration.
-    expect(decoded.providers.codex.enabled).toBe(true);
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
@@ -944,7 +909,6 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 describe("provider enabled defaults", () => {
   it("keeps Muse disabled until a configured instance opts in", () => {
     const muse = ProviderDriverKind.make("muse");
-    expect(decodeServerSettings({}).providers.muse.enabled).toBe(false);
     expect(resolveProviderInstanceEnabled({ driver: muse, config: {} })).toBe(false);
     expect(resolveProviderInstanceEnabled({ driver: muse, enabled: true, config: {} })).toBe(true);
     expect(
@@ -953,26 +917,13 @@ describe("provider enabled defaults", () => {
   });
 
   it("enables only the stable bindings by default", () => {
-    const decoded = decodeServerSettings({});
-    expect(decoded.providers.codex.enabled).toBe(true);
-    expect(decoded.providers.claudeAgent.enabled).toBe(true);
-    expect(decoded.providers.cursor.enabled).toBe(false);
-    expect(decoded.providers.grok.enabled).toBe(false);
-    expect(decoded.providers.opencode.enabled).toBe(false);
-  });
-
-  it("keeps Cursor enabled when an existing user explicitly opted in", () => {
-    const cursor = ProviderDriverKind.make("cursor");
-    const cursorId = ProviderInstanceId.make("cursor");
-    const decoded = decodeServerSettings({
-      providers: { cursor: { enabled: true } },
-      providerInstances: {
-        [cursorId]: { driver: cursor, enabled: true, config: {} },
-      },
-    });
-
-    expect(decoded.providers.cursor.enabled).toBe(true);
-    expect(resolveProviderInstanceEnabled(decoded.providerInstances[cursorId]!)).toBe(true);
+    const enabledByDefault = (driver: string) =>
+      resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make(driver), config: {} });
+    expect(enabledByDefault("codex")).toBe(true);
+    expect(enabledByDefault("claudeAgent")).toBe(true);
+    for (const driver of ["cursor", "grok", "muse", "pi", "opencode", "antigravity"]) {
+      expect(enabledByDefault(driver)).toBe(false);
+    }
   });
 
   it("resolves instance enabled state with explicit false winning", () => {
@@ -1041,42 +992,6 @@ describe("ServerSettings worktree defaults", () => {
     );
     expect(decodeServerSettings({ worktreeSubmodules: "shallow" }).worktreeSubmodules).toBeNull();
     expect(decodeServerSettingsPatch({ worktreeSubmodules: null }).worktreeSubmodules).toBeNull();
-  });
-});
-
-describe("ServerSettings Cursor legacy settings", () => {
-  it("preserves V1 Cursor CLI settings when reading and writing shared settings", () => {
-    const decoded = decodeServerSettings({
-      providers: {
-        cursor: {
-          enabled: true,
-          binaryPath: "cursor-agent",
-          apiEndpoint: "http://127.0.0.1:3774",
-        },
-      },
-    });
-
-    expect(decoded.providers.cursor.enabled).toBe(true);
-    expect(encodeServerSettings(decoded).providers?.cursor).toMatchObject({
-      binaryPath: "cursor-agent",
-      apiEndpoint: "http://127.0.0.1:3774",
-    });
-  });
-
-  it("ignores obsolete Cursor CLI settings in patches", () => {
-    const patch = decodeServerSettingsPatch({
-      providers: {
-        cursor: {
-          enabled: true,
-          binaryPath: "cursor-agent",
-          apiEndpoint: "http://127.0.0.1:3774",
-        },
-      },
-    });
-
-    expect(patch.providers?.cursor?.enabled).toBe(true);
-    expect(patch.providers?.cursor).not.toHaveProperty("binaryPath");
-    expect(patch.providers?.cursor).not.toHaveProperty("apiEndpoint");
   });
 });
 
@@ -1152,13 +1067,6 @@ describe("ServerSettingsPatch string normalization", () => {
       observability: {
         otlpTracesUrl: "  http://localhost:4318/v1/traces  ",
       },
-      providers: {
-        codex: {
-          binaryPath: "  /opt/homebrew/bin/codex  ",
-          homePath: "  ~/.codex  ",
-          launchArgs: "  --strict-config --enable foo  ",
-        },
-      },
       providerInstances: {
         codex_personal: {
           driver: "  codex  ",
@@ -1171,9 +1079,6 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.addProjectBaseDirectory).toBe("~/Development");
     expect(patch.textGenerationModelSelection?.model).toBe("gpt-5.4-mini");
     expect(patch.observability?.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
-    expect(patch.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(patch.providers?.codex?.homePath).toBe("~/.codex");
-    expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");
     expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.driver).toBe(
       "codex",
     );
@@ -1190,19 +1095,9 @@ describe("ServerSettingsPatch string normalization", () => {
     const encoded = encodeServerSettings({
       ...defaultSettings,
       addProjectBaseDirectory: "  ~/Development  ",
-      providers: {
-        ...defaultSettings.providers,
-        codex: {
-          ...defaultSettings.providers.codex,
-          binaryPath: "  /opt/homebrew/bin/codex  ",
-          launchArgs: "  --strict-config  ",
-        },
-      },
     });
 
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
-    expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
   });
 });
 

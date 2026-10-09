@@ -15,7 +15,7 @@ import { AcpRequestError } from "effect-acp/errors";
 import {
   collectSessionConfigOptionValues,
   findSessionConfigOption,
-} from "../provider/acp/AcpRuntimeModel.ts";
+} from "@t3tools/provider-acp/server/runtimeModel";
 import { makeOmpAcpRuntime } from "../provider/acp/OmpAcpSupport.ts";
 import type * as TextGeneration from "./TextGeneration.ts";
 import {
@@ -23,12 +23,12 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
-} from "./TextGenerationPrompts.ts";
+} from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
-} from "./TextGenerationUtils.ts";
+} from "@t3tools/provider-core/server/textGenerationUtils";
 
 const TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_CHARS = 128_000;

@@ -9,9 +9,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -19,10 +17,12 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as ServerConfig from "../config.ts";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { makeOmpAdapterV2 } from "./Adapters/OmpAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
@@ -62,20 +62,26 @@ const registryLayer = ProviderAdapterRegistry.layerFromAdaptersEffect(
         : underlying.spawn(command),
     );
     return [
-      makeOmpAdapterV2({
+      yield* makeOmpAdapterV2({
         instanceId,
         settings,
         environment: {},
         childProcessSpawner: spawner,
-        crypto: yield* Crypto.Crypto,
-        fileSystem: yield* FileSystem.FileSystem,
-        idAllocator: yield* IdAllocator.IdAllocatorV2,
-        serverConfig: yield* ServerConfig.ServerConfig,
         selfInvocation: yield* resolveSelfInvocation(),
       }),
     ];
   }),
-).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer, configLayer)));
+).pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      NodeServices.layer,
+      IdAllocator.layer,
+      configLayer,
+      McpProviderSessions.layer,
+      TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+    ),
+  ),
+);
 
 const layerTest = layerWithRegistry({ name: "omp-elicitation-retry" }, registryLayer, {
   runEffectWorker: false,

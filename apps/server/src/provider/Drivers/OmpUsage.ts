@@ -11,7 +11,7 @@ import * as Hex from "effect/encoding/Hex";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { makeUsageLimits } from "../providerUsageLimits.ts";
+import { makeUsageLimits } from "@t3tools/provider-core/server/usageLimits";
 import { runOmpReadOnlyCommand } from "./OmpDiscovery.ts";
 
 const Timestamp = Schema.Union([Schema.Number, Schema.String]);

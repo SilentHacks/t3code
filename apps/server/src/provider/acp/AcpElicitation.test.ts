@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { projectAcpElicitationForm } from "./AcpElicitation.ts";
+import { projectAcpElicitationForm } from "@t3tools/provider-acp/server/elicitation";
 
 function form(properties: Record<string, unknown>, required?: string[]) {
   const result = projectAcpElicitationForm(
