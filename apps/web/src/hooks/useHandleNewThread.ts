@@ -16,6 +16,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { newDraftId, newThreadId } from "../lib/utils";
+import { withNavigationGuard } from "../lib/navigationGuard";
 import { orderItemsByPreferredIds } from "../components/Sidebar.logic";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -90,9 +91,6 @@ export function useNewThreadHandler() {
         setLogicalProjectDraftThreadId,
         setModelSelection,
       } = useComposerDraftStore.getState();
-      // History changes on navigation, unlike parsed locations rebuilt by router loads.
-      const requestingLocation = router.history.location;
-      const routeChangedSinceRequest = () => router.history.location !== requestingLocation;
       const currentRouteTarget = getCurrentRouteTarget();
       // A new thread carries the user's working mode from the thread being
       // viewed. The target project's configured model still wins; interaction
@@ -200,7 +198,7 @@ export function useNewThreadHandler() {
           : getDraftSession(currentRouteTarget.draftId)
         : null;
       if (emptyStoredDraftThread) {
-        return (async () => {
+        return withNavigationGuard(router.history, async (isCurrent) => {
           const isDraftAlreadyOpen =
             currentRouteTarget?.kind === "draft" &&
             currentRouteTarget.draftId === emptyStoredDraftThread.draftId;
@@ -223,7 +221,7 @@ export function useNewThreadHandler() {
             workspaceContext = pickExplicitWorkspaceOptions(options);
           } else if (!isDraftAlreadyOpen) {
             const defaultEnvMode = await resolveDefaultEnvMode();
-            if (routeChangedSinceRequest()) {
+            if (!isCurrent()) {
               return null;
             }
             // The await yields. If the draft was opened (a concurrent
@@ -324,7 +322,7 @@ export function useNewThreadHandler() {
             replace: options?.replace ?? false,
           });
           return opened;
-        })();
+        });
       }
 
       if (
@@ -360,9 +358,9 @@ export function useNewThreadHandler() {
       const draftId = newDraftId();
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
-      return (async () => {
+      return withNavigationGuard(router.history, async (isCurrent) => {
         const initialEnvMode = options?.envMode ?? (await resolveDefaultEnvMode());
-        if (routeChangedSinceRequest()) {
+        if (!isCurrent()) {
           return null;
         }
         // The await yields, so a concurrent invocation may have registered a
@@ -429,7 +427,7 @@ export function useNewThreadHandler() {
           replace: options?.replace ?? false,
         });
         return { draftId, threadId };
-      })();
+      });
     },
     [environmentServerConfigs, getCurrentRouteTarget, projectGroupingSettings, router],
   );

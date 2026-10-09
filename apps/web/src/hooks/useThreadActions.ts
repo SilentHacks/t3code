@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef } from "react";
+import { withNavigationGuard } from "../lib/navigationGuard";
 
 import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -1014,29 +1015,29 @@ export function useThreadActions() {
       if (permissionFailure) return;
       const resolved = resolveThreadTarget(target);
       if (!resolved) return;
-      // Router loads rebuild parsed locations even when history has not moved.
-      const location = router.history.location;
       const { thread } = resolved;
-      const result = await runSettleAndNewThread({
-        threadKey: scopedThreadKey(target),
-        supportsSettlement: readEnvironmentSupportsSettlement(target.environmentId),
-        canSettle: canSettleAndStartNewThread(thread, { now: new Date().toISOString() }),
-        alreadySettled: thread.settledOverride === "settled",
-        isCurrent: () => router.history.location === location,
-        settle: async () => {
-          const settled = await settleThread(target);
-          if (settled._tag !== "Success") throw squashAtomCommandFailure(settled);
-        },
-        startNewThread: async () => {
-          const permissionFailure = threadOperationFailure(target);
-          if (permissionFailure) throw squashAtomCommandFailure(permissionFailure);
-          return (
-            (await handleNewThreadRef.current(
-              scopeProjectRef(target.environmentId, thread.projectId),
-            )) !== null
-          );
-        },
-      });
+      const result = await withNavigationGuard(router.history, (isCurrent) =>
+        runSettleAndNewThread({
+          threadKey: scopedThreadKey(target),
+          supportsSettlement: readEnvironmentSupportsSettlement(target.environmentId),
+          canSettle: canSettleAndStartNewThread(thread, { now: new Date().toISOString() }),
+          alreadySettled: thread.settledOverride === "settled",
+          isCurrent,
+          settle: async () => {
+            const settled = await settleThread(target);
+            if (settled._tag !== "Success") throw squashAtomCommandFailure(settled);
+          },
+          startNewThread: async () => {
+            const permissionFailure = threadOperationFailure(target);
+            if (permissionFailure) throw squashAtomCommandFailure(permissionFailure);
+            return (
+              (await handleNewThreadRef.current(
+                scopeProjectRef(target.environmentId, thread.projectId),
+              )) !== null
+            );
+          },
+        }),
+      );
       if (result.status === "busy" || result.status === "stale" || result.status === "started")
         return;
       const description =

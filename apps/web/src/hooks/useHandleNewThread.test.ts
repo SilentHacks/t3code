@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { RuntimeMode } from "@t3tools/contracts";
 
-const testState = vi.hoisted(() => {
+const testState = await vi.hoisted(async () => {
+  const { createMemoryHistory } = await import("@tanstack/react-router");
   let completeProjectFileRead: (value: null) => void = () => undefined;
   let projectFileRead = Promise.resolve<null>(null);
   let targetSettings = {
@@ -17,13 +18,14 @@ const testState = vi.hoisted(() => {
     readonly threadId: string;
   } | null = null;
   const router = {
-    history: { location: { href: "/" } },
+    history: createMemoryHistory({ initialEntries: ["/"] }),
     state: {
       location: { href: "/" },
       matches: [{ params: {} }],
     },
     navigate: vi.fn(async (request: { readonly params: { readonly draftId: string } }) => {
       router.state.location.href = `/draft/${request.params.draftId}`;
+      router.history.push(router.state.location.href);
     }),
   };
   const draftStore = {
@@ -61,7 +63,7 @@ const testState = vi.hoisted(() => {
         defaultRuntimeMode: "full-access",
       };
       router.state.location.href = "/";
-      router.history.location = { href: "/" };
+      router.history = createMemoryHistory({ initialEntries: ["/"] });
       router.navigate.mockClear();
       draftStore.setDraftThreadContext.mockClear();
       draftStore.setLogicalProjectDraftThreadId.mockClear();
@@ -227,7 +229,7 @@ describe.each([
     );
 
     testState.router.state.location.href = "/usage";
-    testState.router.history.location = { href: "/usage" };
+    testState.router.history.push("/usage");
     testState.completeProjectFileRead(null);
     await pendingOpen;
 
@@ -243,8 +245,9 @@ describe.each([
       projectId: "project-remote",
     } as never);
     const href = testState.router.state.location.href;
+    testState.router.history.push("/usage");
+    testState.router.history.back();
     testState.router.state.location = { href };
-    testState.router.history.location = { href };
     testState.completeProjectFileRead(null);
     expect(await pendingOpen).toBeNull();
     expect(testState.router.navigate).not.toHaveBeenCalled();
@@ -264,6 +267,27 @@ describe.each([
       draftId: draft?.draftId ?? "draft-delayed",
       threadId: draft?.threadId ?? "thread-delayed",
     });
+    expect(testState.router.navigate).toHaveBeenCalledOnce();
+  });
+
+  it("opens a delayed draft after reparsing the same browser history entry", async () => {
+    testState.reset(draft);
+    const history = testState.router.history;
+    let location = history.location;
+    testState.router.history = {
+      ...history,
+      get location() {
+        return location;
+      },
+    };
+    const pendingOpen = useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+    location = { ...location, state: { ...location.state } };
+    history.notify({ type: "REPLACE" });
+    testState.completeProjectFileRead(null);
+    expect(await pendingOpen).not.toBeNull();
     expect(testState.router.navigate).toHaveBeenCalledOnce();
   });
 

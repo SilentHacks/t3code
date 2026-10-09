@@ -91,6 +91,16 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     update({sessionUpdate:'compaction_update',compactionId:'omp-compact',status:'completed',summary:[{type:'text',text:'Native compaction summary'}]});
   }
   if (process.env.OMP_TEST_PROMPT === 'exit') return process.exit(3);
+  if (process.env.OMP_TEST_PROMPT?.startsWith('interleaved')) {
+    update({sessionUpdate:'agent_message_chunk',messageId:'answer',content:{type:'text',text:'Full explanation. '}});
+    update({sessionUpdate:'agent_thought_chunk',messageId:'answer',content:{type:'text',text:'Checking the conclusion. '}});
+    if (process.env.OMP_TEST_PROMPT === 'interleaved-messages') {
+      update({sessionUpdate:'agent_message_chunk',messageId:'other-answer',content:{type:'text',text:'Separate message.'}});
+    }
+    update({sessionUpdate:'agent_message_chunk',messageId:'answer',content:{type:'text',text:'Final sentences.'}});
+    update({sessionUpdate:'agent_thought_chunk',messageId:'answer',content:{type:'text',text:'Done.'}});
+    return reply({stopReason:'end_turn'});
+  }
   update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'FOREIGN'}}, 'unrelated-session');
   if (process.env.OMP_TEST_PROMPT === 'relocate') return reply({stopReason:'end_turn'});
   update({sessionUpdate:'available_commands_update',availableCommands:[
@@ -490,6 +500,49 @@ describe("OMP ACP wire integration", () => {
       expect(encodeJson(events)).not.toContain("FOREIGN");
       expect(encodeJson(events)).not.toContain("unrelated-session");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live.each(["interleaved", "interleaved-messages"])(
+    "retains complete native messages across stream boundaries (%s)",
+    (outcome) =>
+      Effect.gen(function* () {
+        const harness = yield* openHarness({ environment: { OMP_TEST_PROMPT: outcome } });
+        yield* harness.runtime.startTurn(yield* turnInput(harness));
+        const events = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const persistedItems = new Map(
+          events.flatMap((event) =>
+            event.type === "turn_item.updated"
+              ? [[event.turnItem.id, event.turnItem] as const]
+              : [],
+          ),
+        );
+        const answers = [...persistedItems.values()].filter(
+          (item) => item.type === "assistant_message",
+        );
+        const thoughts = [...persistedItems.values()].filter((item) => item.type === "reasoning");
+        expect(answers).toHaveLength(outcome === "interleaved" ? 1 : 2);
+        expect(answers[0]).toMatchObject({
+          text: "Full explanation. Final sentences.",
+          status: "completed",
+        });
+        expect(thoughts).toHaveLength(1);
+        expect(thoughts[0]).toMatchObject({
+          text: "Checking the conclusion. Done.",
+          status: "completed",
+        });
+        expect(events.at(-1)).toMatchObject({ type: "turn.terminal", status: "completed" });
+        const snapshot = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        expect(snapshot.messages.map((message) => message.text)).toEqual(
+          outcome === "interleaved"
+            ? ["Inspect the repository", "Full explanation. Final sentences."]
+            : ["Inspect the repository", "Full explanation. Final sentences.", "Separate message."],
+        );
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.live("projects native compaction summary through the shared ACP timeline", () =>

@@ -1124,6 +1124,7 @@ interface ActiveTextSegment {
 interface ActiveTextStream {
   current: ActiveTextSegment | null;
   nextSegment: number;
+  readonly messagesBySourceId: Map<string, ActiveTextSegment>;
 }
 
 interface AcpNativeBuildConfiguration {
@@ -2578,22 +2579,31 @@ export function makeAcpAdapterV2(
             yield* closeTextStream(context, kind);
           }
           if (stream.current === null) {
-            const now = yield* DateTime.now;
-            stream.current = {
-              nativeItemId:
-                sourceMessageId === null
-                  ? `${context.nativeTurnId}:${kind}:${stream.nextSegment}`
-                  : `${context.nativeTurnId}:${kind}:message:${sourceMessageId}`,
-              startedAt: now,
-              sourceMessageId,
-              text: "",
-            };
-            stream.nextSegment += 1;
+            // A reasoning/tool boundary closes a stream, not the identified message.
+            stream.current =
+              sourceMessageId === null
+                ? null
+                : (stream.messagesBySourceId.get(sourceMessageId) ?? null);
+            if (stream.current === null) {
+              const now = yield* DateTime.now;
+              stream.current = {
+                nativeItemId:
+                  sourceMessageId === null
+                    ? `${context.nativeTurnId}:${kind}:${stream.nextSegment}`
+                    : `${context.nativeTurnId}:${kind}:message:${sourceMessageId}`,
+                startedAt: now,
+                sourceMessageId,
+                text: "",
+              };
+              stream.nextSegment += 1;
+            }
           } else if (stream.current.sourceMessageId === null && sourceMessageId !== null) {
             // Some agents omit messageId on the first chunk. Keep the already
             // projected identity and use the first later id as its boundary.
             stream.current.sourceMessageId = sourceMessageId;
           }
+          if (sourceMessageId !== null)
+            stream.messagesBySourceId.set(sourceMessageId, stream.current);
           stream.current.text += text;
           yield* emitTextSegment(context, kind, false);
         });
@@ -2610,17 +2620,20 @@ export function makeAcpAdapterV2(
           const stream = textStreamFor(context, kind);
           if (stream.current?.sourceMessageId !== messageId) {
             yield* closeTextStream(context, kind);
-            const now = yield* DateTime.now;
-            stream.current = {
-              nativeItemId: `${context.nativeTurnId}:${kind}:message:${messageId}`,
-              startedAt: now,
-              sourceMessageId: messageId,
-              text,
-            };
-            stream.nextSegment += 1;
-          } else {
-            stream.current.text = text;
+            stream.current = stream.messagesBySourceId.get(messageId) ?? null;
+            if (stream.current === null) {
+              const now = yield* DateTime.now;
+              stream.current = {
+                nativeItemId: `${context.nativeTurnId}:${kind}:message:${messageId}`,
+                startedAt: now,
+                sourceMessageId: messageId,
+                text: "",
+              };
+              stream.nextSegment += 1;
+              stream.messagesBySourceId.set(messageId, stream.current);
+            }
           }
+          stream.current.text = text;
           yield* emitTextSegment(context, kind, false);
         });
 
@@ -6979,9 +6992,9 @@ export function makeAcpAdapterV2(
               startedAt,
               completed,
               itemOrdinals: new Map(),
-              user: { current: null, nextSegment: 0 },
-              assistant: { current: null, nextSegment: 0 },
-              reasoning: { current: null, nextSegment: 0 },
+              user: { current: null, nextSegment: 0, messagesBySourceId: new Map() },
+              assistant: { current: null, nextSegment: 0, messagesBySourceId: new Map() },
+              reasoning: { current: null, nextSegment: 0, messagesBySourceId: new Map() },
               contextUsage: rememberedContextUsage ?? turnInput.providerThread.contextUsage ?? null,
               nativeMetadata: initialNativeMetadata,
               tools: new Map(),

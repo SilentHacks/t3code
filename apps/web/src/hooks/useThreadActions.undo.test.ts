@@ -277,6 +277,28 @@ describe("settle and snooze Undo", () => {
     expect(commands.snooze).toHaveBeenCalledOnce();
   });
 
+  it("opens a new thread when browser history reparses the same entry during settlement", async () => {
+    const history = router.history as ReturnType<typeof createMemoryHistory>;
+    let location = history.location;
+    router.history = {
+      ...history,
+      get location() {
+        return location;
+      },
+    };
+    commands.settle.mockImplementation(async () => {
+      location = { ...location, state: { ...location.state } };
+      history.notify({ type: "REPLACE" });
+      return { _tag: "Success", value: undefined };
+    });
+    await useThreadActions().settleAndNewThread(target);
+    expect(commands.settle).toHaveBeenCalledOnce();
+    expect(commands.newThread).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      projectId: threadShell.projectId,
+    });
+  });
+
   it("reports settlement failure without opening a new thread", async () => {
     commands.settle.mockResolvedValue({
       _tag: "Failure",
