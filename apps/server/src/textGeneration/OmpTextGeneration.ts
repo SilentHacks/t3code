@@ -1,7 +1,7 @@
 import { type ModelSelection, type OmpSettings, TextGenerationError } from "@t3tools/contracts";
 import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -18,6 +18,7 @@ import {
 } from "@t3tools/provider-acp/server/runtimeModel";
 import { makeOmpAcpRuntime } from "../provider/acp/OmpAcpSupport.ts";
 import type * as TextGeneration from "./TextGeneration.ts";
+import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -39,8 +40,8 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
   ompSettings: OmpSettings,
   environment?: NodeJS.ProcessEnv,
 ) {
-  const hostEnvironment = yield* HostProcessEnvironment;
-  const processGroupPlatform = yield* HostProcessPlatform;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const processGroupPlatform = yield* HostProcess.Platform;
   const crypto = yield* Crypto.Crypto;
   const fs = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -305,10 +306,13 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
         ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       };
     });
+  const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
+    Effect.fail(investigationUnsupported("generateReviewGuide", "OMP"));
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateReviewGuide,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

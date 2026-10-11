@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { OmpSettings } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -80,7 +80,7 @@ const makeFixture = Effect.fnUntraced(function* () {
   };
 });
 
-const windows = HostProcessPlatform.defaultValue() === "win32";
+const windows = HostProcess.Platform.defaultValue() === "win32";
 
 describe("OmpDiscovery", () => {
   it.live.skipIf(windows)("reassembles large negotiated model and command catalogs", () =>

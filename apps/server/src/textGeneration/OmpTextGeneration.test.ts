@@ -253,6 +253,26 @@ const fixture = Effect.fn("ompTextFixture")(function* (
 });
 
 it.layer(NodeServices.layer)("OmpTextGeneration", (it) => {
+  it.effect("refuses review-guide investigation without granting tools or spawning a helper", () =>
+    Effect.gen(function* () {
+      const { service, state } = yield* fixture();
+      const result = yield* service
+        .generateReviewGuide({
+          cwd: "/checkout",
+          modelSelection: selection,
+          number: 42,
+          title: "Feature",
+          description: "",
+          baseBranch: "main",
+          baseCommit: "base",
+          settledReview: "",
+        })
+        .pipe(Effect.flip);
+      expect(result.operation).toBe("generateReviewGuide");
+      expect(result.detail).toContain("cannot investigate a checkout read-only");
+      expect(state.workspaces).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
   it.effect(
     "negotiates the native model before refreshed thinking options and preserves title context",
     () =>

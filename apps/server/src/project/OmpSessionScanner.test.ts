@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { OmpSettings, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -249,8 +249,8 @@ it.layer(NodeServices.layer)("OMP session discovery", (it) => {
             }),
             ServerConfig.layerTest(root, { prefix: "omp-config-test-" }),
             Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
-            Layer.succeed(HostProcessEnvironment, {}),
-            Layer.succeed(HostProcessPlatform, "linux"),
+            Layer.succeed(HostProcess.Environment, {}),
+            Layer.succeed(HostProcess.Platform, "linux"),
           ),
         ),
       );

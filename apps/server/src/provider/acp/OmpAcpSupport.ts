@@ -1,5 +1,5 @@
 import type { OmpSettings, RuntimeMode } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
@@ -75,7 +75,7 @@ export const makeOmpAcpRuntime = Effect.fnUntraced(function* (input: OmpAcpRunti
     runtimeMode,
     disableTools,
   );
-  const platform = input.processGroupPlatform ?? (yield* HostProcessPlatform);
+  const platform = input.processGroupPlatform ?? (yield* HostProcess.Platform);
   const ownsProcessGroup = input.ownDetachedProcessGroup ?? platform !== "win32";
   const baseLayer = AcpSessionRuntime.layer({
     ...runtimeOptions,

@@ -41,6 +41,7 @@ import {
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { makeOmpDiscoveryCache } from "./OmpDiscovery.ts";
 import { makeOmpMaintenanceResolver } from "./OmpMaintenance.ts";
+import { ompUsageReader } from "./OmpTranscriptUsage.ts";
 
 const DRIVER = ProviderDriverKind.make("omp");
 const decodeSettings = Schema.decodeSync(OmpSettings);
@@ -53,11 +54,16 @@ export type OmpDriverEnv =
   | Path.Path
   | ProviderLatestVersions.ProviderLatestVersions;
 
-export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
+export const OmpDriver: ProviderDriver<
+  OmpSettings,
+  OmpDriverEnv,
+  FileSystem.FileSystem | Path.Path
+> = {
   driverKind: DRIVER,
   metadata: { displayName: "Oh My Pi", supportsMultipleInstances: true },
   configSchema: OmpSettings,
   defaultConfig: () => decodeSettings({}),
+  usage: ompUsageReader,
   create: (input) =>
     Effect.gen(function* () {
       const { instanceId, displayName, accentColor, enabled, config, environment } = input;
@@ -69,7 +75,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const {
         paths: { cwd },
       } = yield* ProviderHost.ProviderHost;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const processEnv = yield* mergeProviderInstanceEnvironment(environment);
       const settings = { ...config, enabled };
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER,

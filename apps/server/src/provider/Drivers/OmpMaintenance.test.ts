@@ -1,12 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { makeOmpMaintenanceResolver } from "./OmpMaintenance.ts";
 
-const windows = HostProcessPlatform.defaultValue() === "win32";
+const windows = HostProcess.Platform.defaultValue() === "win32";
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 describe("OmpMaintenance", () => {
   it.live.skipIf(windows)(
@@ -30,7 +30,7 @@ console.log('Current version: 18.5.0');console.log('New version available: 18.6.
           resolvedCommandPath: executable,
           realCommandPath: executable,
           env: { ...process.env, OMP_HOME: `${directory}/home` },
-          platform: HostProcessPlatform.defaultValue(),
+          platform: HostProcess.Platform.defaultValue(),
         });
         assert.equal(capabilities.latestVersion, "18.6.0");
         assert.equal(capabilities.update?.executable, executable);
@@ -75,7 +75,7 @@ console.log('Current version: 18.5.0');console.log('New version available: 18.6.
           resolvedCommandPath: executable,
           realCommandPath: executable,
           env: process.env,
-          platform: HostProcessPlatform.defaultValue(),
+          platform: HostProcess.Platform.defaultValue(),
         });
         assert.equal(capabilities.latestVersion, null);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),

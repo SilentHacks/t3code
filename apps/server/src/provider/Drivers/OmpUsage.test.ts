@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { OmpSettings } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -33,7 +33,7 @@ process.stdin.on('end',()=>{console.log(${encodeJson(encodeJson(output))});proce
   return yield* probeOmpUsage(settings, checkedAt, { ...process.env, SCOPE: "scoped" }, directory);
 });
 
-const windows = HostProcessPlatform.defaultValue() === "win32";
+const windows = HostProcess.Platform.defaultValue() === "win32";
 describe("OmpUsage", () => {
   it.effect.skipIf(windows)(
     "keeps windows distinct even when they share the same native pool ID",

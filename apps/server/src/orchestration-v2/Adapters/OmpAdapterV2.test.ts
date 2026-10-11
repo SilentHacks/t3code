@@ -14,7 +14,7 @@ import {
   type ModelSelection,
   type OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -421,7 +421,7 @@ describe("OMP ACP wire integration", () => {
         expect(harness.availableCommands.at(-1)).toEqual(["compact"]);
         const launch = harness.launches[0];
         expect(launch?.args).toEqual(["acp", "--approval-mode=yolo", "--profile", "work"]);
-        expect(launch?.options.detached).toBe((yield* HostProcessPlatform) !== "win32");
+        expect(launch?.options.detached).toBe((yield* HostProcess.Platform) !== "win32");
         expect(
           harness.requests.filter(
             (r) => r.status === "started" && r.method === "session/set_config_option",

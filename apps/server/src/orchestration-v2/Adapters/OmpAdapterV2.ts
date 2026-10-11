@@ -5,7 +5,7 @@ import {
   type OrchestrationV2ProviderCapabilities,
   type RuntimeMode,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as NodeUtil from "node:util";
 import * as Crypto from "effect/Crypto";
@@ -289,7 +289,7 @@ export const OmpAdapterV2Driver: ProviderAdapterDriver<OmpSettings, OmpAdapterV2
   create: Effect.fn("OmpAdapterV2Driver.create")(
     function* (input) {
       const settings = yield* decodeOmpSettings(input.config);
-      const environment = yield* HostProcessEnvironment;
+      const environment = yield* HostProcess.Environment;
       const selfInvocation = yield* resolveSelfInvocation();
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
@@ -298,7 +298,7 @@ export const OmpAdapterV2Driver: ProviderAdapterDriver<OmpSettings, OmpAdapterV2
       return yield* makeOmpAdapterV2({
         instanceId: input.instanceId,
         settings: { ...settings, enabled: input.enabled },
-        environment: mergeProviderInstanceEnvironment(input.environment, environment),
+        environment: yield* mergeProviderInstanceEnvironment(input.environment, environment),
         selfInvocation,
         childProcessSpawner,
         continuationRequests,
