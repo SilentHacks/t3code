@@ -1,5 +1,4 @@
-import { type ModelSelection, type OmpSettings, TextGenerationError } from "@t3tools/contracts";
-import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { type OmpSettings, TextGenerationError } from "@t3tools/contracts";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
@@ -17,25 +16,14 @@ import {
   findSessionConfigOption,
 } from "@t3tools/provider-acp/server/runtimeModel";
 import { makeOmpAcpRuntime } from "../provider/acp/OmpAcpSupport.ts";
-import type * as TextGeneration from "./TextGeneration.ts";
-import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
-import {
-  buildBranchNamePrompt,
-  buildCommitMessagePrompt,
-  buildPrContentPrompt,
-  buildThreadTitlePrompt,
-} from "@t3tools/provider-core/server/textGenerationPrompts";
-import {
-  sanitizeCommitSubject,
-  sanitizePrTitle,
-  sanitizeThreadTitle,
-} from "@t3tools/provider-core/server/textGenerationUtils";
+import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
+import { runOmpReviewInvestigation } from "./OmpReviewInvestigation.ts";
 
 const TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_CHARS = 128_000;
 const isTextGenerationError = Schema.is(TextGenerationError);
 
-/** Short-lived ACP helpers never receive the repository, MCP servers, or tool authority. */
+/** ACP helpers never receive the repository, MCP servers, or native tool authority. */
 export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function* (
   ompSettings: OmpSettings,
   environment?: NodeJS.ProcessEnv,
@@ -46,13 +34,8 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
   const fs = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  const runJson = Effect.fn("OmpTextGeneration.runJson")(
-    function* <S extends Schema.Top>(input: {
-      readonly operation: keyof TextGeneration.TextGeneration["Service"];
-      readonly prompt: string;
-      readonly outputSchema: S;
-      readonly modelSelection: ModelSelection;
-    }) {
+  const runJson: TextGenerationOperations.Runner = Effect.fn("OmpTextGeneration.runJson")(
+    function* <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) {
       const { operation } = input;
       const fail = (detail: string) => new TextGenerationError({ operation, detail });
       const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-text-" });
@@ -130,91 +113,107 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
           if (exceeded) yield* reject("OMP text generation exceeded the output limit.");
         }),
       );
-      const raw = yield* Effect.gen(function* () {
-        const started = yield* runtime.start();
-        sessionId = started.sessionId;
-        // Product defaults are sentinels, never native ACP model IDs.
-        const model = input.modelSelection.model;
-        if (model && model !== "default" && model !== "auto") {
-          const configs = yield* runtime.getConfigOptions;
-          const modelConfig = configs?.find((option) => option.category === "model");
-          if (modelConfig) {
-            if (!collectSessionConfigOptionValues(modelConfig).includes(model)) {
-              return yield* fail("The requested OMP model is not advertised by this session.");
+      const promptJson = <T extends Schema.Top>(prompt: string, outputSchema: T) =>
+        Effect.gen(function* () {
+          const raw = yield* Effect.gen(function* () {
+            const started = yield* runtime.start();
+            sessionId = started.sessionId;
+            // Product defaults are sentinels, never native ACP model IDs.
+            const model = input.modelSelection.model;
+            if (model && model !== "default" && model !== "auto") {
+              const configs = yield* runtime.getConfigOptions;
+              const modelConfig = configs?.find((option) => option.category === "model");
+              if (modelConfig) {
+                if (!collectSessionConfigOptionValues(modelConfig).includes(model)) {
+                  return yield* fail("The requested OMP model is not advertised by this session.");
+                }
+                if (modelConfig.currentValue !== model) yield* runtime.setModel(model);
+              } else if (
+                started.sessionSetupResult.models?.availableModels.some(
+                  (option) => option.modelId === model,
+                )
+              ) {
+                yield* runtime.setSessionModel(model);
+              } else {
+                return yield* fail("OMP did not advertise the requested model.");
+              }
             }
-            if (modelConfig.currentValue !== model) yield* runtime.setModel(model);
-          } else if (
-            started.sessionSetupResult.models?.availableModels.some(
-              (option) => option.modelId === model,
-            )
-          ) {
-            yield* runtime.setSessionModel(model);
-          } else {
-            return yield* fail("OMP did not advertise the requested model.");
-          }
-        }
-        // Model changes can replace thinking choices. Read the new descriptors first.
-        const configs = yield* runtime.getConfigOptions;
-        for (const selection of input.modelSelection.options ?? []) {
-          const option = findSessionConfigOption(configs, selection.id);
-          if (
-            !option ||
-            option.category === "model" ||
-            option.category === "mode" ||
-            option.category === "collaboration_mode"
+            // Model changes can replace thinking choices. Read the new descriptors first.
+            const configs = yield* runtime.getConfigOptions;
+            for (const selection of input.modelSelection.options ?? []) {
+              const option = findSessionConfigOption(configs, selection.id);
+              if (
+                !option ||
+                option.category === "model" ||
+                option.category === "mode" ||
+                option.category === "collaboration_mode"
+              )
+                continue;
+              if (
+                option.type === "boolean"
+                  ? typeof selection.value !== "boolean"
+                  : typeof selection.value !== "string" ||
+                    !collectSessionConfigOptionValues(option).includes(selection.value)
+              )
+                continue;
+              if (option.currentValue !== selection.value)
+                yield* runtime.setConfigOption(option.id, selection.value);
+            }
+            yield* Ref.set(output, "");
+            const result = yield* runtime.prompt({
+              prompt: [
+                {
+                  type: "text",
+                  text: [
+                    "Use only the input below. Do not use tools, read or write files, run commands, or ask questions.",
+                    "Return only the requested JSON object.",
+                    "",
+                    prompt,
+                  ].join("\n"),
+                },
+              ],
+            });
+            if (yield* Deferred.isDone(rejected)) return yield* Deferred.await(rejected);
+            if (result.stopReason === "cancelled")
+              return yield* fail("OMP text generation was cancelled.");
+            return (yield* Ref.get(output)).trim();
+          }).pipe(
+            Effect.onInterrupt(() =>
+              runtime.cancel.pipe(Effect.timeoutOption(2_000), Effect.ignore),
+            ),
+            Effect.raceFirst(Deferred.await(rejected)),
+          );
+          if ((yield* fs.readDirectory(cwd)).length > 0)
+            return yield* fail("OMP wrote files during text generation.");
+          if (!raw) return yield* fail("OMP returned empty text generation output.");
+          return yield* Schema.decodeEffect(Schema.fromJsonString(outputSchema))(
+            extractJsonObject(raw),
+          ).pipe(
+            // Schema diagnostics contain the rejected value. Do not retain raw provider output.
+            Effect.mapError(
+              () =>
+                new TextGenerationError({
+                  operation,
+                  detail: "OMP returned invalid structured output.",
+                }),
+            ),
+          );
+        }).pipe(
+          Effect.mapError((cause) =>
+            isTextGenerationError(cause) ? cause : fail("OMP text generation failed."),
+          ),
+        );
+      return input.investigate
+        ? yield* runOmpReviewInvestigation(input, promptJson).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+            Effect.provideService(HostProcess.Environment, hostEnvironment),
           )
-            continue;
-          if (
-            option.type === "boolean"
-              ? typeof selection.value !== "boolean"
-              : typeof selection.value !== "string" ||
-                !collectSessionConfigOptionValues(option).includes(selection.value)
-          )
-            continue;
-          if (option.currentValue !== selection.value)
-            yield* runtime.setConfigOption(option.id, selection.value);
-        }
-        const result = yield* runtime.prompt({
-          prompt: [
-            {
-              type: "text",
-              text: [
-                "Use only the input below. Do not use tools, read or write files, run commands, or ask questions.",
-                "Return only the requested JSON object.",
-                "",
-                input.prompt,
-              ].join("\n"),
-            },
-          ],
-        });
-        if (yield* Deferred.isDone(rejected)) return yield* Deferred.await(rejected);
-        if (result.stopReason === "cancelled")
-          return yield* fail("OMP text generation was cancelled.");
-        return (yield* Ref.get(output)).trim();
-      }).pipe(
-        Effect.onInterrupt(() => runtime.cancel.pipe(Effect.timeoutOption(2_000), Effect.ignore)),
-        Effect.raceFirst(Deferred.await(rejected)),
-      );
-      if ((yield* fs.readDirectory(cwd)).length > 0)
-        return yield* fail("OMP wrote files during text generation.");
-      if (!raw) return yield* fail("OMP returned empty text generation output.");
-      return yield* Schema.decodeEffect(Schema.fromJsonString(input.outputSchema))(
-        extractJsonObject(raw),
-      ).pipe(
-        // Schema diagnostics contain the rejected value. Do not retain raw provider output.
-        Effect.mapError(
-          () =>
-            new TextGenerationError({
-              operation,
-              detail: "OMP returned invalid structured output.",
-            }),
-        ),
-      );
+        : yield* promptJson(input.prompt, input.outputSchema);
     },
     (effect, input) =>
       effect.pipe(
         Effect.scoped,
-        Effect.timeoutOption(TIMEOUT_MS),
+        Effect.timeoutOption(input.investigate?.timeoutMs ?? TIMEOUT_MS),
         Effect.flatMap(
           Option.match({
             onNone: () =>
@@ -238,81 +237,5 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
       ),
   );
 
-  const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
-    Effect.fn("OmpTextGeneration.generateCommitMessage")(function* (input) {
-      const generated = yield* runJson({
-        operation: "generateCommitMessage",
-        ...buildCommitMessagePrompt({
-          branch: input.branch,
-          stagedSummary: input.stagedSummary,
-          stagedPatch: input.stagedPatch,
-          includeBranch: input.includeBranch === true,
-          policy: input.policy,
-        }),
-        modelSelection: input.modelSelection,
-      });
-      return {
-        subject: sanitizeCommitSubject(generated.subject),
-        body: generated.body.trim(),
-        ...("branch" in generated && typeof generated.branch === "string"
-          ? { branch: sanitizeFeatureBranchName(generated.branch) }
-          : {}),
-      };
-    });
-  const generatePrContent: TextGeneration.TextGeneration["Service"]["generatePrContent"] =
-    Effect.fn("OmpTextGeneration.generatePrContent")(function* (input) {
-      const generated = yield* runJson({
-        operation: "generatePrContent",
-        ...buildPrContentPrompt({
-          baseBranch: input.baseBranch,
-          headBranch: input.headBranch,
-          commitSummary: input.commitSummary,
-          diffSummary: input.diffSummary,
-          diffPatch: input.diffPatch,
-          policy: input.policy,
-          changeRequestTemplate: input.changeRequestTemplate,
-        }),
-        modelSelection: input.modelSelection,
-      });
-      return { title: sanitizePrTitle(generated.title), body: generated.body.trim() };
-    });
-  const generateBranchName: TextGeneration.TextGeneration["Service"]["generateBranchName"] =
-    Effect.fn("OmpTextGeneration.generateBranchName")(function* (input) {
-      const generated = yield* runJson({
-        operation: "generateBranchName",
-        ...buildBranchNamePrompt({
-          message: input.message,
-          attachments: input.attachments,
-          naming: input.naming,
-        }),
-        modelSelection: input.modelSelection,
-      });
-      return { branch: formatGeneratedBranchName(generated.branch, input.naming) };
-    });
-  const generateThreadTitle: TextGeneration.TextGeneration["Service"]["generateThreadTitle"] =
-    Effect.fn("OmpTextGeneration.generateThreadTitle")(function* (input) {
-      const generated = yield* runJson({
-        operation: "generateThreadTitle",
-        ...buildThreadTitlePrompt({
-          message: input.message,
-          previousTitle: input.previousTitle,
-          linkedContext: input.linkedContext,
-          attachments: input.attachments,
-        }),
-        modelSelection: input.modelSelection,
-      });
-      return {
-        title: sanitizeThreadTitle(generated.title),
-        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
-      };
-    });
-  const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
-    Effect.fail(investigationUnsupported("generateReviewGuide", "OMP"));
-  return {
-    generateCommitMessage,
-    generatePrContent,
-    generateBranchName,
-    generateThreadTitle,
-    generateReviewGuide,
-  } satisfies TextGeneration.TextGeneration["Service"];
+  return TextGenerationOperations.fromRunner("OmpTextGeneration", runJson);
 });

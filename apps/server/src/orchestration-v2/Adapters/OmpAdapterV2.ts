@@ -80,7 +80,7 @@ export interface OmpAdapterV2Options {
 }
 
 const TaskIdentity = {
-  id: Schema.NonEmptyString,
+  id: Schema.String,
   agent: Schema.String,
   task: Schema.String,
   description: Schema.optionalKey(Schema.String),
@@ -105,34 +105,44 @@ const decodeTaskOutput = Schema.decodeUnknownOption(
   }),
 );
 
-export const extractOmpSubagentUpdate: NonNullable<AcpAdapterV2Flavor["extractSubagentUpdate"]> = (
-  toolCall,
-) => {
+export const extractOmpSubagentUpdates: NonNullable<
+  AcpAdapterV2Flavor["extractSubagentUpdates"]
+> = (toolCall) => {
   const parsed = Option.getOrUndefined(decodeTaskOutput(toolCall.data.rawOutput));
-  if (parsed === undefined) return undefined;
+  if (parsed === undefined) return [];
   const { results, progress = [] } = parsed.details;
-  // The shared hook accepts one subagent per tool call. Never collapse a batch
-  // into a fabricated child; retain its complete native tool input/output.
-  if (results.length > 1 || progress.length > 1) return undefined;
-  const result = results[0];
-  const agent = result ?? progress[0];
-  if (agent === undefined || agent.id.trim().length === 0) return undefined;
-  const status: AcpAdapterV2SubagentUpdate["status"] = result
-    ? result.exitCode === 0
-      ? "completed"
-      : "failed"
-    : progress[0]?.status === "aborted"
-      ? "cancelled"
-      : (progress[0]?.status ?? "pending");
-  return {
-    nativeTaskId: agent.id,
-    prompt: agent.task,
-    title: agent.description ?? agent.agent,
-    model: agent.resolvedModelIdentity ?? null,
-    status,
-    childSessionId: null,
-    result: result?.output ?? null,
-  };
+  const preserveNormalTool = [...progress, ...results].some(
+    (agent) => agent.id.trim().length === 0,
+  );
+  const updates = new Map<string, AcpAdapterV2SubagentUpdate>();
+  for (const agent of progress) {
+    if (agent.id.trim().length === 0) continue;
+    updates.set(agent.id, {
+      nativeTaskId: agent.id,
+      prompt: agent.task,
+      title: agent.description ?? agent.agent,
+      model: agent.resolvedModelIdentity ?? null,
+      status: agent.status === "aborted" ? "cancelled" : agent.status,
+      childSessionId: null,
+      result: null,
+      ...(preserveNormalTool ? { suppressNormalTool: false } : {}),
+    });
+  }
+  for (const agent of results) {
+    if (agent.id.trim().length === 0) continue;
+    const previous = updates.get(agent.id);
+    updates.set(agent.id, {
+      nativeTaskId: agent.id,
+      prompt: agent.task,
+      title: agent.description ?? previous?.title ?? agent.agent,
+      model: agent.resolvedModelIdentity ?? previous?.model ?? null,
+      status: agent.exitCode === 0 ? "completed" : "failed",
+      childSessionId: null,
+      result: agent.output,
+      ...(preserveNormalTool ? { suppressNormalTool: false } : {}),
+    });
+  }
+  return [...updates.values()];
 };
 
 export function ompLaunchRuntimeMode(
@@ -220,7 +230,7 @@ export function makeOmpAcpAdapterFlavor(options: OmpAdapterV2Options): AcpAdapte
     restartRuntimeAfterInterrupt: true,
     terminateRuntimeProcessGroupOnInterrupt: true,
     resolveModelId: (selection) => selection.model.trim(),
-    extractSubagentUpdate: extractOmpSubagentUpdate,
+    extractSubagentUpdates: extractOmpSubagentUpdates,
     ...(onAvailableCommandsUpdate === undefined
       ? {}
       : {

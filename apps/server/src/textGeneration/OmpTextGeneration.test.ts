@@ -1,4 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
 import { it } from "@effect/vitest";
 import { OmpSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -17,6 +19,7 @@ import { makeOmpTextGeneration } from "./OmpTextGeneration.ts";
 
 vi.mock("../provider/acp/OmpAcpSupport.ts", () => ({ makeOmpAcpRuntime: vi.fn() }));
 const encodeTextGenerationError = Schema.encodeEffect(Schema.fromJsonString(TextGenerationError));
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const settings = Schema.decodeSync(OmpSettings)({ enabled: true, profile: "work" });
 const selection = {
   instanceId: ProviderInstanceId.make("omp-work"),
@@ -26,9 +29,44 @@ const selection = {
 type Runtime = AcpSessionRuntime["Service"];
 const context = { requestId: "test", method: "test" };
 
+const reviewInput = Effect.fn("ompReviewInput")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-review-interop-" });
+  const git = (args: string[]) =>
+    NodeChildProcess.execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    }).trim();
+  git(["init", "-q"]);
+  yield* fs.writeFileString(`${cwd}/source.ts`, "export const value = 1;\n");
+  git(["add", "source.ts"]);
+  git(["commit", "-qm", "Base"]);
+  const baseCommit = git(["rev-parse", "HEAD"]);
+  yield* fs.writeFileString(`${cwd}/source.ts`, "export const value = 2;\n");
+  git(["commit", "-qam", "Change"]);
+  return {
+    cwd,
+    modelSelection: selection,
+    number: 42,
+    title: "Feature",
+    description: "",
+    baseBranch: "main",
+    baseCommit,
+    settledReview: "",
+  };
+});
+
 const fixture = Effect.fn("ompTextFixture")(function* (
   options: {
     output?: string;
+    outputs?: readonly string[];
     stopReason?: AcpSchema.PromptResponse["stopReason"];
     request?:
       | "permission"
@@ -203,7 +241,11 @@ const fixture = Effect.fn("ompTextFixture")(function* (
                   status: "pending",
                 },
               });
-            yield* emit(options.output ?? '{"title":"Repair login","needsRefinement":true}');
+            yield* emit(
+              options.outputs?.[state.prompts.length - 1] ??
+                options.output ??
+                '{"title":"Repair login","needsRefinement":true}',
+            );
             return {
               stopReason: options.stopReason ?? "end_turn",
             } satisfies AcpSchema.PromptResponse;
@@ -253,7 +295,86 @@ const fixture = Effect.fn("ompTextFixture")(function* (
 });
 
 it.layer(NodeServices.layer)("OmpTextGeneration", (it) => {
-  it.effect("refuses review-guide investigation without granting tools or spawning a helper", () =>
+  it.effect(
+    "generates a schema-valid guide after investigating through the broker in one isolated ACP session",
+    () =>
+      Effect.gen(function* () {
+        const input = yield* reviewInput();
+        const stop = {
+          title: "Value changes",
+          summary: "The exported value changes from one to two.",
+          attention: null,
+          excerpts: [],
+          files: [{ path: "source.ts", note: "Value changes" }],
+          notes: [],
+          questions: [],
+        };
+        const { service, state } = yield* fixture({
+          outputs: [
+            encodeJson({ action: "diff", path: "source.ts", start: 1, count: 200 }),
+            encodeJson({
+              action: "read",
+              revision: "head",
+              path: "source.ts",
+              start: 1,
+              count: 200,
+            }),
+            encodeJson({ action: "finish", guide: { stops: [stop] } }),
+          ],
+        });
+        const guide = yield* service.generateReviewGuide(input);
+        expect(guide.stops).toEqual([stop]);
+        expect(state.workspaces).toHaveLength(1);
+        expect(state.workspaces).not.toContain(input.cwd);
+        expect(state.prompts[1]).toContain("+export const value = 2");
+        expect(state.prompts[2]).toContain("value = 2");
+        expect(state.closed).toEqual(state.workspaces);
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each([
+    "permission",
+    "question",
+    "file",
+    "write-file",
+    "terminal",
+    "extension",
+    "tool",
+    "disk-write",
+  ] as const)("rejects native %s attempts during review investigation", (request) =>
+    Effect.gen(function* () {
+      const input = yield* reviewInput();
+      const { service, state } = yield* fixture({ request });
+      const error = yield* service.generateReviewGuide(input).pipe(Effect.flip);
+      expect(error.operation).toBe("generateReviewGuide");
+      expect(error.detail).toMatch(/tool|user input|permission|wrote files/);
+      expect(state.closed).toEqual(state.workspaces);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("rejects broker writes without retaining sensitive output", () =>
+    Effect.gen(function* () {
+      const input = yield* reviewInput();
+      const { service } = yield* fixture({
+        output: '{"action":"write","path":"source.ts","content":"sensitive-review-value"}',
+      });
+      const error = yield* service.generateReviewGuide(input).pipe(Effect.flip);
+      expect(error.detail).toContain("invalid structured output");
+      expect(yield* encodeTextGenerationError(error)).not.toContain("sensitive-review-value");
+    }).pipe(Effect.scoped),
+  );
+  it.effect("bounds the whole review investigation and cancels a hung ACP prompt", () =>
+    Effect.gen(function* () {
+      const input = yield* reviewInput();
+      const { service, state, entered } = yield* fixture({ hang: true });
+      const fiber = yield* service.generateReviewGuide(input).pipe(Effect.flip, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust(15 * 60_000);
+      const error = yield* Fiber.join(fiber);
+      expect(error.detail).toContain("timed out");
+      expect(state.cancelled).toBeGreaterThan(0);
+      expect(state.closed).toEqual(state.workspaces);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("rejects an invalid investigation base without granting native tools", () =>
     Effect.gen(function* () {
       const { service, state } = yield* fixture();
       const result = yield* service
@@ -269,8 +390,9 @@ it.layer(NodeServices.layer)("OmpTextGeneration", (it) => {
         })
         .pipe(Effect.flip);
       expect(result.operation).toBe("generateReviewGuide");
-      expect(result.detail).toContain("cannot investigate a checkout read-only");
-      expect(state.workspaces).toEqual([]);
+      expect(result.detail).toContain("valid base commit");
+      expect(state.prompts).toEqual([]);
+      expect(state.closed).toEqual(state.workspaces);
     }).pipe(Effect.scoped),
   );
   it.effect(

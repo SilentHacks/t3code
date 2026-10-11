@@ -44,7 +44,7 @@ export interface Request<S extends Schema.Top> {
    * the prompt carries everything and the model runs with no tools at all. A runner that cannot
    * guarantee read-only tools fails rather than answering blind.
    */
-  readonly investigate?: { readonly timeoutMs: number } | undefined;
+  readonly investigate?: { readonly timeoutMs: number; readonly baseCommit: string } | undefined;
 }
 
 /** How long an investigating run may take; a large change needs far longer than a title. */
@@ -184,7 +184,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
       operation: "generateReviewGuide",
       cwd: input.cwd,
       modelSelection: input.modelSelection,
-      investigate: { timeoutMs: INVESTIGATION_TIMEOUT_MS },
+      investigate: { timeoutMs: INVESTIGATION_TIMEOUT_MS, baseCommit: input.baseCommit },
       ...buildReviewGuidePrompt(input),
     });
   });

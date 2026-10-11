@@ -6624,249 +6624,265 @@ for await (const line of createInterface({ input: process.stdin })) {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("projects completed-root carryover eagerly and drain cannot resurrect it", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
-      const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
-        [];
-      const instanceId = ProviderInstanceId.make("acp-test");
-      const childSessionId = "019f44a6-4820-7402-925d-bc862ee711dd";
-      let subagentPhase: "spawn" | "complete" = "spawn";
-      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
-      let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          enablePostSettleContinuation: true,
-          normalizeToolCall: normalizeXAiAcpToolCallState,
-          extractSubagentUpdate: (toolCall) =>
-            extractXAiAcpSubagentUpdate(toolCall) ??
-            (toolCall.toolCallId !== "tool-call-generic-1"
-              ? undefined
-              : subagentPhase === "spawn"
-                ? {
-                    nativeTaskId: "task-generic-1",
-                    prompt: "background subagent",
-                    title: "background subagent",
-                    model: null,
-                    status: "running",
-                    childSessionId,
-                    result: null,
-                  }
-                : {
-                    nativeTaskId: "task-generic-1",
-                    prompt: "",
-                    title: null,
-                    model: null,
-                    status: "completed",
-                    childSessionId,
-                    result: "SUB_DONE",
-                  }),
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
-            protocolEvents,
-            wrapRuntime: (runtime) => ({
-              ...runtime,
-              handleSessionUpdate: (handler) =>
-                Effect.sync(() => {
-                  sessionUpdateHandler = handler;
-                }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
-            }),
-          }),
-        },
-        selfInvocation,
-        continuationRequests: {
-          offer: (request) =>
-            Effect.sync(() => {
-              continuationRequests.push(request);
-            }),
-        },
-      });
-      const threadId = ThreadId.make("thread-acp-completed-root-eager-carryover");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make(
-          "provider-session-acp-completed-root-eager-carryover",
-        ),
-        modelSelection,
-        runtimePolicy,
-      });
-      if (runtime.hasPendingBackgroundWork === undefined) {
-        return yield* Effect.die(
-          "ACP runtime must expose hasPendingBackgroundWork when post-settle continuation is enabled.",
+  it.effect.each(["single", "batch"] as const)(
+    "projects completed-root %s carryover eagerly and drain cannot resurrect it",
+    (projection) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
-      }
-      const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
-      const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-      yield* runtime.events.pipe(
-        Stream.runForEach((event) => Queue.offer(events, event)),
-        Effect.forkScoped,
-      );
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const now = yield* DateTime.now;
-      yield* runtime.startTurn(
-        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
-      );
-      yield* Stream.fromQueue(protocolEvents).pipe(
-        Stream.filter(
-          (event) =>
-            event.direction === "incoming" &&
-            event.stage === "raw" &&
-            typeof event.payload === "string" &&
-            event.payload.includes('"stopReason"'),
-        ),
-        Stream.runHead,
-      );
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("1 second");
-
-      const firstProviderTurnId = idAllocator.derive.providerTurn({
-        driver: ACP_TEST_DRIVER,
-        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
-      });
-      let firstTerminalStatus: string | null = null;
-      while (firstTerminalStatus === null) {
-        const event = yield* Queue.take(events);
-        if (event.type === "turn.terminal" && event.providerTurnId === firstProviderTurnId) {
-          firstTerminalStatus = event.status;
-        }
-      }
-      assert.equal(firstTerminalStatus, "completed");
-      assert.isTrue(yield* hasPendingBackgroundWork);
-      assert.isDefined(sessionUpdateHandler, "session update handler must be wired");
-
-      // A production Grok spawn ACK has raw tool status completed but extracts
-      // as a running subagent with its original non-empty prompt. It buffers and
-      // offers a continuation after root settlement.
-      yield* sessionUpdateHandler!({
-        sessionId: "mock-session-1",
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "tool-call-generic-1",
-          title: "spawn_subagent",
-          kind: "other",
-          status: "completed",
-          rawInput: {
-            description: "background subagent",
-            prompt: "background subagent",
-            subagent_type: "general-purpose",
+        const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+        const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
+          [];
+        const instanceId = ProviderInstanceId.make("acp-test");
+        const childSessionId = "019f44a6-4820-7402-925d-bc862ee711dd";
+        let subagentPhase: "spawn" | "complete" = "spawn";
+        type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            enablePostSettleContinuation: true,
+            normalizeToolCall: normalizeXAiAcpToolCallState,
+            extractSubagentUpdates: (toolCall) => {
+              const update =
+                extractXAiAcpSubagentUpdate(toolCall) ??
+                (toolCall.toolCallId !== "tool-call-generic-1"
+                  ? undefined
+                  : subagentPhase === "spawn"
+                    ? {
+                        nativeTaskId: "task-generic-1",
+                        prompt: "background subagent",
+                        title: "background subagent",
+                        model: null,
+                        status: "running",
+                        childSessionId,
+                        result: null,
+                      }
+                    : {
+                        nativeTaskId: "task-generic-1",
+                        prompt: "",
+                        title: null,
+                        model: null,
+                        status: "completed",
+                        childSessionId,
+                        result: "SUB_DONE",
+                      });
+              return update === undefined
+                ? []
+                : projection === "single"
+                  ? [update]
+                  : [update, { ...update, nativeTaskId: "task-generic-2", childSessionId: null }];
+            },
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
+              protocolEvents,
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                handleSessionUpdate: (handler) =>
+                  Effect.sync(() => {
+                    sessionUpdateHandler = handler;
+                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+              }),
+            }),
           },
-          rawOutput: {
-            type: "Text",
-            text: [
-              "Subagent started in background.",
-              `subagent_id: ${childSessionId}`,
-              "type: general-purpose",
-              "description: background subagent",
-              "",
-              `Use get_command_or_subagent_output with task_ids=["${childSessionId}"] and timeout_ms to wait for results.`,
-            ].join("\n"),
+          selfInvocation,
+          continuationRequests: {
+            offer: (request) =>
+              Effect.sync(() => {
+                continuationRequests.push(request);
+              }),
           },
-        },
-      });
-
-      // The child-session terminal bypasses the root wake buffer and projects
-      // eagerly through the still-observable completed-root subscriber.
-      subagentPhase = "complete";
-      yield* sessionUpdateHandler!({
-        sessionId: childSessionId,
-        update: {
-          sessionUpdate: "tool_call_update" as const,
-          toolCallId: "tool-call-generic-1",
-          title: "background subagent",
-          kind: "other" as const,
-          status: "completed" as const,
-          rawOutput: { content: "SUB_DONE" },
-        },
-      });
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-
-      let eagerCompletedUpdates = 0;
-      let eagerRunningUpdates = 0;
-      let polled = yield* Queue.poll(events);
-      while (Option.isSome(polled)) {
-        const event = polled.value;
-        if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
-          if (event.turnItem.status === "completed") eagerCompletedUpdates += 1;
-          if (event.turnItem.status === "running") eagerRunningUpdates += 1;
+        });
+        const threadId = ThreadId.make("thread-acp-completed-root-eager-carryover");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(
+            "provider-session-acp-completed-root-eager-carryover",
+          ),
+          modelSelection,
+          runtimePolicy,
+        });
+        if (runtime.hasPendingBackgroundWork === undefined) {
+          return yield* Effect.die(
+            "ACP runtime must expose hasPendingBackgroundWork when post-settle continuation is enabled.",
+          );
         }
+        const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
+        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
+        );
+        yield* Stream.fromQueue(protocolEvents).pipe(
+          Stream.filter(
+            (event) =>
+              event.direction === "incoming" &&
+              event.stage === "raw" &&
+              typeof event.payload === "string" &&
+              event.payload.includes('"stopReason"'),
+          ),
+          Stream.runHead,
+        );
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("1 second");
+
+        const firstProviderTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
+        });
+        let firstTerminalStatus: string | null = null;
+        while (firstTerminalStatus === null) {
+          const event = yield* Queue.take(events);
+          if (event.type === "turn.terminal" && event.providerTurnId === firstProviderTurnId) {
+            firstTerminalStatus = event.status;
+          }
+        }
+        assert.equal(firstTerminalStatus, "completed");
+        assert.isTrue(yield* hasPendingBackgroundWork);
+        assert.isDefined(sessionUpdateHandler, "session update handler must be wired");
+
+        // A production Grok spawn ACK has raw tool status completed but extracts
+        // as a running subagent with its original non-empty prompt. It buffers and
+        // offers a continuation after root settlement.
+        yield* sessionUpdateHandler!({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "tool-call-generic-1",
+            title: "spawn_subagent",
+            kind: "other",
+            status: "completed",
+            rawInput: {
+              description: "background subagent",
+              prompt: "background subagent",
+              subagent_type: "general-purpose",
+            },
+            rawOutput: {
+              type: "Text",
+              text: [
+                "Subagent started in background.",
+                `subagent_id: ${childSessionId}`,
+                "type: general-purpose",
+                "description: background subagent",
+                "",
+                `Use get_command_or_subagent_output with task_ids=["${childSessionId}"] and timeout_ms to wait for results.`,
+              ].join("\n"),
+            },
+          },
+        });
+
+        // The child-session terminal bypasses the root wake buffer and projects
+        // eagerly through the still-observable completed-root subscriber.
+        subagentPhase = "complete";
+        yield* sessionUpdateHandler!({
+          sessionId: childSessionId,
+          update: {
+            sessionUpdate: "tool_call_update" as const,
+            toolCallId: "tool-call-generic-1",
+            title: "background subagent",
+            kind: "other" as const,
+            status: "completed" as const,
+            rawOutput: { content: "SUB_DONE" },
+          },
+        });
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+
+        let eagerCompletedUpdates = 0;
+        let eagerRunningUpdates = 0;
+        let polled = yield* Queue.poll(events);
+        while (Option.isSome(polled)) {
+          const event = polled.value;
+          if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
+            if (event.turnItem.status === "completed") eagerCompletedUpdates += 1;
+            if (event.turnItem.status === "running") eagerRunningUpdates += 1;
+          }
+          polled = yield* Queue.poll(events);
+        }
+        assert.equal(
+          eagerCompletedUpdates,
+          projection === "single" ? 1 : 2,
+          "completed root must project every native task before any attach",
+        );
+        assert.equal(eagerRunningUpdates, 0);
+        assert.lengthOf(continuationRequests, 1);
+        assert.isTrue(yield* hasPendingBackgroundWork, "buffered spawn ACK still requires a drain");
+
+        const continuationNow = yield* DateTime.now;
+        const continuationInput = makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: continuationNow,
+          ordinal: 2,
+          messageCreatedBy: "agent",
+          messageCreationSource: "provider",
+          messageText: "Background task completed.",
+        });
+        yield* runtime.startTurn(continuationInput);
+        yield* Effect.yieldNow;
+        let replayedLineages = 0;
+        let replayedSubagentUpdates = 0;
+        let replayedTurnItems = 0;
         polled = yield* Queue.poll(events);
-      }
-      assert.equal(eagerCompletedUpdates, 1, "completed root must project before any attach");
-      assert.equal(eagerRunningUpdates, 0);
-      assert.lengthOf(continuationRequests, 1);
-      assert.isTrue(yield* hasPendingBackgroundWork, "buffered spawn ACK still requires a drain");
-
-      const continuationNow = yield* DateTime.now;
-      const continuationInput = makeTurnInput({
-        threadId,
-        providerThread,
-        instanceId,
-        runtimePolicy,
-        now: continuationNow,
-        ordinal: 2,
-        messageCreatedBy: "agent",
-        messageCreationSource: "provider",
-        messageText: "Background task completed.",
-      });
-      yield* runtime.startTurn(continuationInput);
-      yield* Effect.yieldNow;
-      let replayedLineages = 0;
-      let replayedSubagentUpdates = 0;
-      let replayedTurnItems = 0;
-      polled = yield* Queue.poll(events);
-      while (Option.isSome(polled)) {
-        const event = polled.value;
-        if (event.type === "app_thread.created") {
-          replayedLineages += 1;
+        while (Option.isSome(polled)) {
+          const event = polled.value;
+          if (event.type === "app_thread.created") {
+            replayedLineages += 1;
+          }
+          if (
+            event.type === "subagent.updated" &&
+            event.subagent.runId === continuationInput.runId
+          ) {
+            replayedSubagentUpdates += 1;
+          }
+          if (
+            event.type === "turn_item.updated" &&
+            event.turnItem.runId === continuationInput.runId
+          ) {
+            replayedTurnItems += 1;
+          }
+          polled = yield* Queue.poll(events);
         }
-        if (event.type === "subagent.updated" && event.subagent.runId === continuationInput.runId) {
-          replayedSubagentUpdates += 1;
-        }
-        if (
-          event.type === "turn_item.updated" &&
-          event.turnItem.runId === continuationInput.runId
-        ) {
-          replayedTurnItems += 1;
-        }
-        polled = yield* Queue.poll(events);
-      }
-      assert.equal(replayedLineages, 0, "buffered spawn ACK must not create a second lineage");
-      assert.equal(
-        replayedSubagentUpdates,
-        0,
-        "buffered spawn ACK must not re-open the terminal subagent",
-      );
-      assert.equal(
-        replayedTurnItems,
-        0,
-        "buffered spawn ACK must not create a continuation-owned turn item",
-      );
-      assert.isFalse(yield* hasPendingBackgroundWork);
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
+        assert.equal(replayedLineages, 0, "buffered spawn ACK must not create a second lineage");
+        assert.equal(
+          replayedSubagentUpdates,
+          0,
+          "buffered spawn ACK must not re-open the terminal subagent",
+        );
+        assert.equal(
+          replayedTurnItems,
+          0,
+          "buffered spawn ACK must not create a continuation-owned turn item",
+        );
+        assert.isFalse(yield* hasPendingBackgroundWork);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(

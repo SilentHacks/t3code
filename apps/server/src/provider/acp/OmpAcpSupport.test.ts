@@ -21,7 +21,15 @@ describe("OMP launch policy", () => {
     ["full-access", "--approval-mode=yolo"],
   ] as const)("maps %s to the current OMP CLI's %s mode", (mode, nativeMode) => {
     expect(ompAcpSpawnArgs(mode)).toEqual(["acp", nativeMode]);
-    expect(ompAcpSpawnArgs(mode, true)).toEqual(["acp", nativeMode, "--no-tools"]);
+    expect(ompAcpSpawnArgs(mode, true)).toEqual([
+      "acp",
+      nativeMode,
+      "--no-tools",
+      "--no-extensions",
+      "--no-skills",
+      "--no-rules",
+      "--no-lsp",
+    ]);
   });
 
   it("uses one profile argument and keeps credentials exclusively in the environment", () => {

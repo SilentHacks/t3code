@@ -36,7 +36,13 @@ export function ompAcpSpawnArgs(
         : runtimeMode === "auto-accept-edits"
           ? "--approval-mode=write"
           : "--approval-mode=always-ask";
-  return ["acp", approvalArgument, ...(disableTools ? ["--no-tools"] : [])];
+  return [
+    "acp",
+    approvalArgument,
+    ...(disableTools
+      ? ["--no-tools", "--no-extensions", "--no-skills", "--no-rules", "--no-lsp"]
+      : []),
+  ];
 }
 
 export function buildOmpAcpSpawnInput(

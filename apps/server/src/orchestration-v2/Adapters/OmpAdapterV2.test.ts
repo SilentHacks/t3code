@@ -36,7 +36,7 @@ import {
   type ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import {
-  extractOmpSubagentUpdate,
+  extractOmpSubagentUpdates,
   makeOmpAcpAdapterFlavor,
   makeOmpAdapterV2,
   normalizeOmpSessionUpdate,
@@ -91,6 +91,16 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     update({sessionUpdate:'compaction_update',compactionId:'omp-compact',status:'completed',summary:[{type:'text',text:'Native compaction summary'}]});
   }
   if (process.env.OMP_TEST_PROMPT === 'exit') return process.exit(3);
+  if (process.env.OMP_TEST_PROMPT === 'batch') {
+    const agent = (id, status) => ({id,agent:'explore',task:'Inspect '+id,status,resolvedModelIdentity:model});
+    update({sessionUpdate:'tool_call',toolCallId:'batch',title:'task',kind:'other',status:'in_progress',
+      rawOutput:{details:{projectAgentsDir:null,results:[],progress:[agent('a','running'),agent('b','running')]}}});
+    update({sessionUpdate:'tool_call_update',toolCallId:'batch',status:'completed',
+      rawOutput:{details:{projectAgentsDir:null,results:[
+        {...agent('a','completed'),exitCode:0,output:'Result a'},
+        {...agent('b','failed'),exitCode:1,output:'Result b'}]}}});
+    return reply({stopReason:'end_turn'});
+  }
   if (process.env.OMP_TEST_PROMPT?.startsWith('interleaved')) {
     update({sessionUpdate:'agent_message_chunk',messageId:'answer',content:{type:'text',text:'Full explanation. '}});
     update({sessionUpdate:'agent_thought_chunk',messageId:'answer',content:{type:'text',text:'Checking the conclusion. '}});
@@ -266,7 +276,7 @@ const task = (rawOutput: unknown) => ({
 describe("OMP truthful task projection", () => {
   it("projects only native single-agent IDs, not ACP child-thread IDs", () => {
     expect(
-      extractOmpSubagentUpdate(
+      extractOmpSubagentUpdates(
         task({
           content: [{ type: "text", text: "Done" }],
           details: {
@@ -283,7 +293,7 @@ describe("OMP truthful task projection", () => {
             ],
           },
         }),
-      ),
+      ).at(0),
     ).toMatchObject({
       nativeTaskId: "agent-7",
       childSessionId: null,
@@ -293,7 +303,7 @@ describe("OMP truthful task projection", () => {
   });
   it("keeps native progress and cancellation statuses", () => {
     expect(
-      extractOmpSubagentUpdate(
+      extractOmpSubagentUpdates(
         task({
           details: {
             projectAgentsDir: null,
@@ -301,10 +311,10 @@ describe("OMP truthful task projection", () => {
             progress: [{ id: "agent-7", agent: "explore", task: "Inspect", status: "aborted" }],
           },
         }),
-      )?.status,
+      ).at(0)?.status,
     ).toBe("cancelled");
   });
-  it("does not invent agents from bare tool input, summaries, malformed IDs or batch results", () => {
+  it("does not invent agents from bare tool input, summaries or malformed IDs", () => {
     const result = {
       id: "agent-7",
       agent: "explore",
@@ -317,13 +327,43 @@ describe("OMP truthful task projection", () => {
       "Spawned agent",
       { details: { results: [result] } },
       { details: { projectAgentsDir: null, results: [{ ...result, id: "" }] } },
-      { details: { projectAgentsDir: null, results: [result, { ...result, id: "agent-8" }] } },
     ]) {
-      expect(extractOmpSubagentUpdate(task(output))).toBeUndefined();
+      expect(extractOmpSubagentUpdates(task(output))).toEqual([]);
     }
     expect(OmpProviderCapabilitiesV2.subagents.exposesSubagentThreadIds).toBe(false);
     expect(OmpProviderCapabilitiesV2.threads.canForkFromTurn).toBe(false);
     expect(OmpProviderCapabilitiesV2.checkpointing.providerCanRollbackConversation).toBe(false);
+  });
+  it("projects every native ID in a mixed batch, with results overriding stale progress", () => {
+    const agent = {
+      agent: "explore",
+      task: "Inspect",
+      resolvedModelIdentity: "Provider/Native-v1",
+    };
+    expect(
+      extractOmpSubagentUpdates(
+        task({
+          details: {
+            projectAgentsDir: null,
+            progress: [
+              { ...agent, id: "a", status: "running" },
+              { ...agent, id: "b", status: "aborted" },
+              { ...agent, id: "c", status: "pending" },
+              { ...agent, id: "", status: "running" },
+            ],
+            results: [
+              { ...agent, id: "a", exitCode: 0, output: "Done" },
+              { ...agent, id: "d", exitCode: 1, output: "Failed" },
+            ],
+          },
+        }),
+      ),
+    ).toMatchObject([
+      { nativeTaskId: "a", status: "completed", result: "Done", childSessionId: null },
+      { nativeTaskId: "b", status: "cancelled", childSessionId: null },
+      { nativeTaskId: "c", status: "pending", childSessionId: null },
+      { nativeTaskId: "d", status: "failed", result: "Failed", childSessionId: null },
+    ]);
   });
 });
 
@@ -383,6 +423,40 @@ describe("OMP display normalization", () => {
 });
 
 describe("OMP ACP wire integration", () => {
+  it.live("projects distinct agents and terminal results from one native batch", () =>
+    Effect.gen(function* () {
+      const harness = yield* openHarness({ environment: { OMP_TEST_PROMPT: "batch" } });
+      yield* harness.runtime.startTurn(yield* turnInput(harness));
+      const events = yield* harness.runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      const agents = new Map(
+        events.flatMap((event) =>
+          event.type === "subagent.updated"
+            ? [[event.subagent.nativeTaskRef?.nativeId, event.subagent] as const]
+            : [],
+        ),
+      );
+      expect(agents.size).toBe(2);
+      expect(
+        new Set(
+          events.flatMap((event) => (event.type === "subagent.updated" ? [event.subagent.id] : [])),
+        ).size,
+      ).toBe(2);
+      expect(agents.get("a")).toMatchObject({
+        status: "completed",
+        result: "Result a",
+        providerThreadId: null,
+      });
+      expect(agents.get("b")).toMatchObject({
+        status: "failed",
+        result: "Result b",
+        providerThreadId: null,
+      });
+      expect(events.at(-1)).toMatchObject({ type: "turn.terminal", status: "completed" });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
   it.live(
     "projects a normal turn, usage and native task results while isolating foreign updates",
     () =>

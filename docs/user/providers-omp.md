@@ -72,6 +72,8 @@ session configuration.
 Commands, skills, permissions, questions, plans, usage, and context information appear when the
 running OMP session advertises or sends them. Features that OMP does not advertise are not enabled.
 Some native terminal widgets and extension-specific interfaces do not have a T3 equivalent.
+Parallel OMP tasks appear as separate agents with their own progress and results. They do not
+expose separate resumable child sessions in T3.
 Use T3's new-thread and worktree controls instead of OMP's `/fresh`, `/move`, `/wt`, or `/worktree`
 commands. Those commands are unavailable inside managed T3 threads.
 
@@ -110,6 +112,11 @@ as a system model. These helpers use short-lived, tools-disabled sessions in an 
 workspace, not your repository. They reject tool work, permission requests, questions, cancelled
 responses, and invalid structured output. A failed helper reports an error rather than accepting
 partial output.
+
+To use OMP for guided pull-request reviews, select it as the review guide model under
+**Settings → Source Control**. OMP investigates committed files and diffs through a bounded,
+read-only reader; native tools stay disabled, and untracked files are not accessible. Large or
+unsupported investigations fail visibly instead of producing a guide from incomplete evidence.
 
 ## Troubleshooting
 
