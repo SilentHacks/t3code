@@ -90,7 +90,7 @@ export const ompUsageFormat: TranscriptUsageFormat<typeof OmpScanState.Type> = {
     timestamp: true,
     message: { role: true, model: true, provider: true, usage: true },
   },
-  mightCarryUsage: (line) => line.includes('"usage"') || line.includes('"session"'),
+  usageMarkers: ['"usage"', '"session"'],
   parseLine: (line, state) => {
     let parsed: unknown;
     try {
