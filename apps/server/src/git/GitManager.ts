@@ -731,7 +731,8 @@ export const make = Effect.gen(function* () {
     readonly threadId?: ThreadId | undefined;
   }) {
     const settings = yield* serverSettingsService.getSettings;
-    if (!hasProjectSettingsOverrides(settings)) return settings;
+    if (!hasProjectSettingsOverrides(settings))
+      return { settings, projectId: null as ProjectId | null };
     const projectId: ProjectId | null = yield* input.threadId !== undefined
       ? threads.getThreadShell(input.threadId).pipe(
           Effect.map((thread) => thread?.projectId ?? null),
@@ -741,7 +742,7 @@ export const make = Effect.gen(function* () {
           Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
           Effect.orElseSucceed(() => null),
         );
-    return resolveProjectSettings(settings, projectId).settings;
+    return { settings: resolveProjectSettings(settings, projectId).settings, projectId };
   });
   // Best effort: a settings read failure falls back to the default location.
   const readWorktreesDirectory = serverSettingsService.getSettings.pipe(
@@ -755,7 +756,7 @@ export const make = Effect.gen(function* () {
       options?.submodules !== undefined
         ? options.submodules
         : yield* projectSettingsFor(input).pipe(
-            Effect.map((settings) => settings.worktreeSubmodules),
+            Effect.map(({ settings }) => settings.worktreeSubmodules),
             Effect.orElseSucceed(() => null),
           );
     const worktreesDirectory = yield* readWorktreesDirectory;
@@ -1992,7 +1993,11 @@ export const make = Effect.gen(function* () {
     headContext: Pick<BranchHeadContext, "isCrossRepository" | "remoteName">,
   ) {
     const configured = yield* gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
-    if (configured) return configured;
+    if (configured) {
+      // Older worktree handoffs recorded checkout revisions as PR target branches.
+      const configuredBranch = yield* gitCore.resolveBranchName(cwd, configured);
+      if (configuredBranch) return configuredBranch;
+    }
 
     if (upstreamRef && !headContext.isCrossRepository) {
       const upstreamBranch = extractBranchNameFromRemoteRef(upstreamRef, {
@@ -2798,7 +2803,7 @@ export const make = Effect.gen(function* () {
           worktreesDirectory: yield* readWorktreesDirectory,
           // Best effort: a settings read failure falls back to the checkout's t3.json.
           submodules: yield* projectSettingsFor(input).pipe(
-            Effect.map((settings) => settings.worktreeSubmodules),
+            Effect.map(({ settings }) => settings.worktreeSubmodules),
             Effect.orElseSucceed(() => null),
           ),
         },
@@ -2910,7 +2915,7 @@ export const make = Effect.gen(function* () {
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
         const textGenerationSettings = yield* projectSettingsFor(input).pipe(
-          Effect.flatMap((settings) =>
+          Effect.flatMap(({ settings, projectId }) =>
             settings.sourceControlWriterModelSelection === null
               ? Effect.succeed({
                   modelSelection: settings.textGenerationModelSelection,
@@ -2921,6 +2926,7 @@ export const make = Effect.gen(function* () {
                     modelSelection: ServerSettings.resolveSourceControlWriterModelSelection(
                       settings,
                       providers,
+                      projectId,
                     ),
                     style: settings.sourceControlWritingStyle,
                   })),

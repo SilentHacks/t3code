@@ -3834,6 +3834,47 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect.each([
+    { branch: "fix/name", existingBranches: ["fix"], expected: "fix-2/name" },
+    { branch: "fix/name", existingBranches: ["fix/name/child"], expected: "fix/name-2" },
+  ])("commits on $expected when $branch has ref namespace collisions", (scenario) =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const mainSha = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+      for (const branch of scenario.existingBranches) {
+        yield* runGit(repoDir, ["branch", branch]);
+      }
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\nnamespace-collision\n");
+
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: () =>
+            Effect.succeed({
+              subject: "Fix namespace collision",
+              body: "",
+              branch: scenario.branch,
+            }),
+        },
+      });
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        featureBranch: true,
+      });
+
+      expect(result.branch).toEqual({ status: "created", name: scenario.expected });
+      expect(result.commit.status).toBe("created");
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe(
+        scenario.expected,
+      );
+      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe("");
+      for (const branch of ["main", ...scenario.existingBranches]) {
+        expect((yield* runGit(repoDir, ["rev-parse", branch])).stdout.trim()).toBe(mainSha);
+      }
+    }),
+  );
+
   it.effect("featureBranch uses custom commit message and derives branch name", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -4778,6 +4819,101 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
       ).toBe(true);
       expect(ghCalls.some((call) => call.startsWith("pr view "))).toBe(false);
+    }),
+  );
+
+  it.effect.each(["commit", "short-commit", "tag", "revision"] as const)(
+    "creates a PR against the default branch with a legacy %s base setting",
+    (kind) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["branch", "-m", "main", "trunk"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "trunk"]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/legacy-base"]);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "feature.txt"), "feature\n");
+        yield* runGit(repoDir, ["add", "feature.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+        const commit = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+        yield* runGit(repoDir, ["tag", "v1"]);
+        const baseRef =
+          kind === "commit"
+            ? commit
+            : kind === "short-commit"
+              ? commit.slice(0, 12)
+              : kind === "tag"
+                ? "v1"
+                : "HEAD~0";
+        yield* runGit(repoDir, ["config", "branch.feature/legacy-base.gh-merge-base", baseRef]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/legacy-base"]);
+        let generatedBase = "";
+        let generatedSummary = "";
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: { defaultBranch: "trunk", prListSequence: ["[]", "[]"] },
+          textGeneration: {
+            generatePrContent: (input) => {
+              generatedBase = input.baseBranch;
+              generatedSummary = input.commitSummary;
+              return Effect.succeed({ title: "Feature PR", body: "Feature body" });
+            },
+          },
+        });
+
+        const result = yield* runStackedAction(manager, { cwd: repoDir, action: "create_pr" });
+
+        expect(result.pr.status).toBe("created");
+        expect(generatedBase).toBe("trunk");
+        expect(generatedSummary).toContain("Feature commit");
+        expect(
+          ghCalls.some((call) =>
+            call.includes("pr create --base trunk --head feature/legacy-base"),
+          ),
+        ).toBe(true);
+      }),
+  );
+
+  it.effect.each([
+    "release/v2",
+    "refs/heads/release/v2",
+    "origin/release/v2",
+    "deadbeef",
+    "remote-only",
+  ])("preserves the configured PR target branch %s", (baseRef) =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const baseBranch = baseRef === "deadbeef" ? baseRef : "release/v2";
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", baseBranch]);
+      yield* runGit(repoDir, ["push", "-u", "origin", baseBranch]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/configured-base"]);
+      if (baseRef === "remote-only") {
+        yield* runGit(repoDir, ["branch", "-D", baseBranch]);
+      }
+      NodeFS.writeFileSync(NodePath.join(repoDir, "feature.txt"), "feature\n");
+      yield* runGit(repoDir, ["add", "feature.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/configured-base"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/configured-base.gh-merge-base",
+        baseRef === "remote-only" ? baseBranch : baseRef,
+      ]);
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: { prListSequence: ["[]", "[]"] },
+      });
+
+      const result = yield* runStackedAction(manager, { cwd: repoDir, action: "create_pr" });
+
+      expect(result.pr.status).toBe("created");
+      expect(
+        ghCalls.some((call) =>
+          call.includes(`pr create --base ${baseBranch} --head feature/configured-base`),
+        ),
+      ).toBe(true);
     }),
   );
 
