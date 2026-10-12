@@ -8,6 +8,7 @@ import * as NodePath from "node:path";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 
 import { TEST_FORMATS } from "./usageTestFormats.ts";
+import { ompUsageFormat } from "../provider/Drivers/OmpTranscriptUsage.ts";
 import { readTranscriptRecords, transcriptLineGate } from "./usageTranscriptReader.ts";
 
 let dir: string;
@@ -70,6 +71,41 @@ function codexUsageLine(outputTokens: number, secondsOffset: number): string {
 }
 
 describe("readTranscriptRecords resume", () => {
+  it("retains OMP session headers through byte filtering and resumed scans", async () => {
+    const path = NodePath.join(dir, "omp.jsonl");
+    await NodeFSP.writeFile(
+      path,
+      '{"type":"session","id":"omp-native"}\n{"type":"message","message":{"role":"toolResult","content":"ignored"}}\n',
+    );
+    const first = await readTranscriptRecords(path, ompUsageFormat);
+    assert.isNotNull(first);
+    assert.deepStrictEqual(first.records, []);
+
+    await NodeFSP.appendFile(
+      path,
+      `${JSON.stringify({
+        type: "message",
+        id: "native-entry",
+        timestamp: "2026-08-01T10:00:00Z",
+        message: {
+          role: "assistant",
+          provider: "native",
+          model: "model",
+          usage: { input: 10, output: 5 },
+        },
+      })}\n`,
+    );
+    const second = await readTranscriptRecords(path, ompUsageFormat, first.position);
+    assert.isNotNull(second);
+    assert.isTrue(second.resumed);
+    assert.strictEqual(second.records.length, 1);
+    assert.strictEqual(second.records[0]?.sessionId, "omp-native");
+    assert.strictEqual(second.records[0]?.totals.outputTokens, 5);
+    const full = await readTranscriptRecords(path, ompUsageFormat);
+    assert.isNotNull(full);
+    assert.deepStrictEqual(full.records, second.records);
+  });
+
   it("parses only appended lines when resuming a grown file", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
     await NodeFSP.writeFile(path, claudeLine(1, 5) + claudeLine(2, 7));
