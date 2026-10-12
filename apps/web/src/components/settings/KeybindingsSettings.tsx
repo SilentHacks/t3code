@@ -39,6 +39,8 @@ import {
 import { isElectron } from "../../env";
 import { useOpenInPreferredEditor } from "../../editorPreferences";
 import { formatShortcutLabel } from "../../keybindings";
+import { projectScriptIdFromCommand } from "../../projectScripts";
+import { usePrimaryEnvironment } from "../../state/environments";
 import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -1280,25 +1282,38 @@ function BrowserKeybindingNotice() {
 }
 
 export function KeybindingsSettingsPanel() {
-  // The representative environment supplies the displayed bindings; edits
-  // fan out to every connected environment in the selection, so one
-  // shortcut change reaches each machine the user runs T3 Code on.
-  const { environment: primaryEnvironment, connectedEnvironments } = useSettingsScope();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const settingsScope = useSettingsScope();
+  const searchTargetId = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
+  const [bindingKind, setBindingKind] = useState<"application" | "script">(() =>
+    searchTargetId.startsWith("keybinding-script.") ? "script" : "application",
+  );
+  const bindingEnvironment =
+    bindingKind === "application" ? primaryEnvironment : settingsScope.environment;
+  const connectedEnvironments = useMemo(
+    () =>
+      bindingKind === "script"
+        ? settingsScope.connectedEnvironments
+        : primaryEnvironment?.connection.phase === "connected" && primaryEnvironment.serverConfig
+          ? [primaryEnvironment]
+          : [],
+    [bindingKind, primaryEnvironment, settingsScope.connectedEnvironments],
+  );
   const canOpenKeybindingsFile = useEnvironmentScope(
-    primaryEnvironment?.environmentId ?? null,
+    bindingEnvironment?.environmentId ?? null,
     AuthOrchestrationOperateScope,
   );
   const writableIds = useEnvironmentsWithScope(connectedEnvironments, AuthSettingsWriteScope);
   const canWriteSettings =
     connectedEnvironments.length > 0 &&
     connectedEnvironments.every((target) => writableIds.has(target.environmentId));
-  const serverKeybindings = primaryEnvironment?.serverConfig?.keybindings;
+  const serverKeybindings = bindingEnvironment?.serverConfig?.keybindings;
   const keybindings = useMemo(
     () => mergeWithDefaultKeybindings(serverKeybindings ?? []),
     [serverKeybindings],
   );
-  const keybindingsConfigPath = primaryEnvironment?.serverConfig?.keybindingsConfigPath ?? null;
-  const availableEditors = primaryEnvironment?.serverConfig?.availableEditors ?? [];
+  const keybindingsConfigPath = bindingEnvironment?.serverConfig?.keybindingsConfigPath ?? null;
+  const availableEditors = bindingEnvironment?.serverConfig?.availableEditors ?? [];
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
@@ -1306,14 +1321,20 @@ export function KeybindingsSettingsPanel() {
     reportFailure: false,
   });
   const openInPreferredEditor = useOpenInPreferredEditor(
-    primaryEnvironment?.environmentId ?? null,
+    bindingEnvironment?.environmentId ?? null,
     availableEditors,
   );
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
   const [isAddingBinding, setIsAddingBinding] = useState(false);
-  const rows = useMemo(() => buildKeybindingRows(keybindings, query), [keybindings, query]);
+  const rows = useMemo(
+    () =>
+      buildKeybindingRows(keybindings, query).filter(
+        (row) => (projectScriptIdFromCommand(row.command) !== null) === (bindingKind === "script"),
+      ),
+    [bindingKind, keybindings, query],
+  );
   const groups = useMemo(() => groupKeybindingRows(rows), [rows]);
   // Settings search jumps to a command, so only its first row anchors.
   const anchorIds = useMemo(() => {
@@ -1328,22 +1349,31 @@ export function KeybindingsSettingsPanel() {
   }, [rows]);
   // The search-target context is provided by this panel's own page container,
   // so the jump target is read from the route hash here.
-  const searchTargetId = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
   const [handledSearchTargetId, setHandledSearchTargetId] = useState(searchTargetId);
 
   // A settings-search jump must not be hidden by the page's own filter.
   if (searchTargetId !== handledSearchTargetId) {
     setHandledSearchTargetId(searchTargetId);
-    if (searchTargetId.startsWith("keybinding-")) setQuery("");
+    if (searchTargetId.startsWith("keybinding-")) {
+      setQuery("");
+      setBindingKind(searchTargetId.startsWith("keybinding-script.") ? "script" : "application");
+      setIsAddingBinding(false);
+    }
   }
-  const commandOptions = useMemo(() => buildKeybindingCommandOptions(keybindings), [keybindings]);
+  const commandOptions = useMemo(
+    () =>
+      buildKeybindingCommandOptions(keybindings).filter(
+        (command) => (projectScriptIdFromCommand(command) !== null) === (bindingKind === "script"),
+      ),
+    [bindingKind, keybindings],
+  );
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
 
   const openKeybindingsFile = useCallback(() => {
     if (
       !keybindingsConfigPath ||
-      !primaryEnvironment ||
-      !readEnvironmentScope(primaryEnvironment.environmentId, AuthOrchestrationOperateScope)
+      !bindingEnvironment ||
+      !readEnvironmentScope(bindingEnvironment.environmentId, AuthOrchestrationOperateScope)
     )
       return;
     void (async () => {
@@ -1359,12 +1389,13 @@ export function KeybindingsSettingsPanel() {
         type: "error",
       });
     })();
-  }, [keybindingsConfigPath, openInPreferredEditor, primaryEnvironment]);
+  }, [keybindingsConfigPath, openInPreferredEditor, bindingEnvironment]);
 
   const saveKeybinding = useCallback(
     (input: ServerUpsertKeybindingInput) => {
       if (
-        !primaryEnvironment ||
+        !bindingEnvironment ||
+        connectedEnvironments.length === 0 ||
         !connectedEnvironments.every((target) =>
           readEnvironmentScope(target.environmentId, AuthSettingsWriteScope),
         )
@@ -1399,13 +1430,14 @@ export function KeybindingsSettingsPanel() {
         }
       })();
     },
-    [connectedEnvironments, primaryEnvironment, upsertKeybinding],
+    [connectedEnvironments, bindingEnvironment, upsertKeybinding],
   );
 
   const removeKeybinding = useCallback(
     (row: KeybindingRow) => {
       if (
-        !primaryEnvironment ||
+        !bindingEnvironment ||
+        connectedEnvironments.length === 0 ||
         !connectedEnvironments.every((target) =>
           readEnvironmentScope(target.environmentId, AuthSettingsWriteScope),
         )
@@ -1433,7 +1465,7 @@ export function KeybindingsSettingsPanel() {
         }
       })();
     },
-    [connectedEnvironments, primaryEnvironment, removeKeybindingMutation],
+    [connectedEnvironments, bindingEnvironment, removeKeybindingMutation],
   );
 
   const resetKeybinding = useCallback(
@@ -1469,6 +1501,27 @@ export function KeybindingsSettingsPanel() {
         {...searchableSetting("keybindings")}
         headerAction={!isElectron ? <BrowserKeybindingNotice /> : null}
       >
+        <div className="flex flex-wrap gap-2 px-3 pt-3 sm:px-4" aria-label="Keybinding ownership">
+          {(["application", "script"] as const).map((kind) => (
+            <Button
+              key={kind}
+              type="button"
+              variant={bindingKind === kind ? "secondary" : "outline"}
+              aria-pressed={bindingKind === kind}
+              onClick={() => {
+                setBindingKind(kind);
+                setIsAddingBinding(false);
+              }}
+            >
+              {kind === "application" ? "Application shortcuts" : "Project script shortcuts"}
+            </Button>
+          ))}
+        </div>
+        <p className="px-3 pt-3 text-xs text-muted-foreground sm:px-4">
+          {bindingKind === "application"
+            ? `Application shortcuts apply across all machines and are stored on ${primaryEnvironment?.label ?? "the primary connection"}. The machine and project selection above applies only to project script shortcuts.`
+            : "Project script shortcuts use the machine and project selection above and run on the active project's environment."}
+        </p>
         <div className="flex flex-wrap items-center gap-2 px-3 py-3 sm:px-4">
           <KeybindingsSearchInput query={query} onChange={setQuery} inputRef={searchInputRef} />
           <Button
