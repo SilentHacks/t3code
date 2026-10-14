@@ -14,6 +14,9 @@ const state = vi.hoisted(() => ({
   canWriteSettings: true,
   canWriteSecondary: false,
   primaryConnected: true,
+  remoteOnly: false,
+  remoteConnected: true,
+  ownerMissing: false,
   searchTarget: "",
   primaryBindings: [] as ResolvedKeybindingsConfig,
   secondaryBindings: [] as ResolvedKeybindingsConfig,
@@ -54,16 +57,30 @@ vi.mock("../../state/server", () => ({
 }));
 
 vi.mock("../../state/environments", () => ({
-  usePrimaryEnvironment: () => ({
-    environmentId: "primary-settings",
-    label: "Primary Mac",
-    connection: { phase: state.primaryConnected ? "connected" : "disconnected" },
-    serverConfig: {
-      keybindings: state.primaryBindings,
-      keybindingsConfigPath: "/fixture/keybindings.json",
-      availableEditors: [],
-    },
-  }),
+  useApplicationKeybindingsEnvironment: () =>
+    state.ownerMissing
+      ? null
+      : state.remoteOnly
+        ? {
+            environmentId: "secondary-settings",
+            label: "Remote VPS",
+            connection: { phase: state.remoteConnected ? "connected" : "disconnected" },
+            serverConfig: {
+              keybindings: state.secondaryBindings,
+              keybindingsConfigPath: "/secondary/keybindings.json",
+              availableEditors: [],
+            },
+          }
+        : {
+            environmentId: "primary-settings",
+            label: "Primary Mac",
+            connection: { phase: state.primaryConnected ? "connected" : "disconnected" },
+            serverConfig: {
+              keybindings: state.primaryBindings,
+              keybindingsConfigPath: "/fixture/keybindings.json",
+              availableEditors: [],
+            },
+          },
 }));
 
 vi.mock("./SettingsScopeContext", () => ({
@@ -133,6 +150,9 @@ describe("KeybindingsSettings editor permission", () => {
     state.canWriteSettings = true;
     state.canWriteSecondary = false;
     state.primaryConnected = true;
+    state.remoteOnly = false;
+    state.remoteConnected = true;
+    state.ownerMissing = false;
     state.searchTarget = "";
     state.primaryBindings = [];
     state.secondaryBindings = [];
@@ -258,6 +278,69 @@ describe("KeybindingsSettings editor permission", () => {
     current.onRemove(current.allRows.find((row) => row.command === remap.command)!);
     expect(state.upsert).not.toHaveBeenCalled();
     expect(state.remove).not.toHaveBeenCalled();
+  });
+
+  it("reads and persists the remote-only application owner instead of disabling editing", async () => {
+    state.remoteOnly = true;
+    state.canWriteSecondary = true;
+    state.secondaryBindings = bindings([remap]);
+    const current = actions();
+    expect(current.allRows.find((row) => row.command === remap.command)?.key).toBe("mod+shift+s");
+    const replacement = { ...remap, key: "mod+shift+k", replace: remap };
+    state.upsert.mockImplementation(async (target) => {
+      state.secondaryBindings = bindings([target.input]);
+      return { _tag: "Success", value: undefined };
+    });
+    current.onSave(replacement);
+    await vi.waitFor(() => expect(state.upsert).toHaveBeenCalledTimes(1));
+    expect(state.upsert).toHaveBeenCalledWith({
+      environmentId: "secondary-settings",
+      input: replacement,
+    });
+    expect(actions().allRows.find((row) => row.command === remap.command)?.key).toBe("mod+shift+k");
+    expect(
+      resolveChatShortcutCommand(
+        { key: "K", code: "KeyK", metaKey: true, ctrlKey: false, shiftKey: true, altKey: false },
+        mergeWithDefaultKeybindings(state.secondaryBindings),
+        mergeWithDefaultKeybindings(state.primaryBindings),
+        { platform: "MacIntel", context: { terminalFocus: false } },
+      ),
+    ).toBe("thread.settleAndNew");
+    const row = actions().allRows.find((row) => row.command === remap.command)!;
+    actions().onRemove(row);
+    expect(state.remove).toHaveBeenCalledWith({
+      environmentId: "secondary-settings",
+      input: { ...remap, key: "mod+shift+k" },
+    });
+    actions().onReset(row);
+    expect(state.upsert).toHaveBeenCalledWith({
+      environmentId: "secondary-settings",
+      input: { ...remap, key: "mod+alt+shift+n", replace: { ...remap, key: "mod+shift+k" } },
+    });
+  });
+
+  it.each(["read-only", "disconnected", "missing"])(
+    "blocks remote-only edits when the owner is %s",
+    (condition) => {
+      state.remoteOnly = true;
+      state.canWriteSecondary = condition !== "read-only";
+      state.remoteConnected = condition !== "disconnected";
+      state.ownerMissing = condition === "missing";
+      const current = actions();
+      current.onSave(remap);
+      current.onRemove(current.allRows.find((row) => row.command === remap.command)!);
+      expect(state.upsert).not.toHaveBeenCalled();
+      expect(state.remove).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rechecks the remote owner's grant before a queued write", () => {
+    state.remoteOnly = true;
+    state.canWriteSecondary = true;
+    const current = actions();
+    state.canWriteSecondary = false;
+    current.onSave(remap);
+    expect(state.upsert).not.toHaveBeenCalled();
   });
 
   it("keeps script edits on the selected machine and excludes application commands", () => {

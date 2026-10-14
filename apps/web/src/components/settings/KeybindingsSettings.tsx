@@ -40,7 +40,7 @@ import { isElectron } from "../../env";
 import { useOpenInPreferredEditor } from "../../editorPreferences";
 import { formatShortcutLabel } from "../../keybindings";
 import { projectScriptIdFromCommand } from "../../projectScripts";
-import { usePrimaryEnvironment } from "../../state/environments";
+import { useApplicationKeybindingsEnvironment } from "../../state/environments";
 import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -1282,22 +1282,23 @@ function BrowserKeybindingNotice() {
 }
 
 export function KeybindingsSettingsPanel() {
-  const primaryEnvironment = usePrimaryEnvironment();
+  const applicationEnvironment = useApplicationKeybindingsEnvironment();
   const settingsScope = useSettingsScope();
   const searchTargetId = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
   const [bindingKind, setBindingKind] = useState<"application" | "script">(() =>
     searchTargetId.startsWith("keybinding-script.") ? "script" : "application",
   );
   const bindingEnvironment =
-    bindingKind === "application" ? primaryEnvironment : settingsScope.environment;
+    bindingKind === "application" ? applicationEnvironment : settingsScope.environment;
   const connectedEnvironments = useMemo(
     () =>
       bindingKind === "script"
         ? settingsScope.connectedEnvironments
-        : primaryEnvironment?.connection.phase === "connected" && primaryEnvironment.serverConfig
-          ? [primaryEnvironment]
+        : applicationEnvironment?.connection.phase === "connected" &&
+            applicationEnvironment.serverConfig
+          ? [applicationEnvironment]
           : [],
-    [bindingKind, primaryEnvironment, settingsScope.connectedEnvironments],
+    [bindingKind, applicationEnvironment, settingsScope.connectedEnvironments],
   );
   const canOpenKeybindingsFile = useEnvironmentScope(
     bindingEnvironment?.environmentId ?? null,
@@ -1519,7 +1520,7 @@ export function KeybindingsSettingsPanel() {
         </div>
         <p className="px-3 pt-3 text-xs text-muted-foreground sm:px-4">
           {bindingKind === "application"
-            ? `Application shortcuts apply across all machines and are stored on ${primaryEnvironment?.label ?? "the primary connection"}. The machine and project selection above applies only to project script shortcuts.`
+            ? `Application shortcuts apply across all machines and are stored on ${applicationEnvironment?.label ?? "the shortcut-owning connection"}. The machine and project selection above applies only to project script shortcuts.`
             : "Project script shortcuts use the machine and project selection above and run on the active project's environment."}
         </p>
         <div className="flex flex-wrap items-center gap-2 px-3 py-3 sm:px-4">
@@ -1555,7 +1556,11 @@ export function KeybindingsSettingsPanel() {
 
       {!canWriteSettings ? (
         <p className="text-xs text-muted-foreground">
-          This connection can view keybindings but cannot change them.
+          {bindingEnvironment === null
+            ? "Connect an environment to configure application shortcuts."
+            : connectedEnvironments.length === 0
+              ? "Reconnect the shortcut-owning environment to change its keybindings."
+              : "This connection can view keybindings but cannot change them."}
         </p>
       ) : null}
       <div inert={!canWriteSettings} className="flex flex-col gap-8">

@@ -16,6 +16,7 @@ import {
   useEnvironmentPresentation,
 } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
+import { applicationKeybindingsEnvironmentIdAtom } from "./applicationKeybindings";
 import { relayEnvironmentDiscovery } from "./relay";
 import { usePreparedConnection } from "./session";
 
@@ -79,6 +80,10 @@ export function useEnvironment(
 
 export function usePrimaryEnvironment(): EnvironmentPresentation | null {
   return useEnvironment(usePrimaryEnvironmentId());
+}
+
+export function useApplicationKeybindingsEnvironment(): EnvironmentPresentation | null {
+  return useEnvironment(useAtomValue(applicationKeybindingsEnvironmentIdAtom));
 }
 
 export function useEnvironmentHttpBaseUrl(environmentId: EnvironmentId | null): string | null {
