@@ -1557,7 +1557,7 @@ export function KeybindingsSettingsPanel() {
       {!canWriteSettings ? (
         <p className="text-xs text-muted-foreground">
           {bindingEnvironment === null
-            ? "Connect an environment to configure application shortcuts."
+            ? "Connect an environment to change keybindings."
             : connectedEnvironments.length === 0
               ? "Reconnect the shortcut-owning environment to change its keybindings."
               : "This connection can view keybindings but cannot change them."}

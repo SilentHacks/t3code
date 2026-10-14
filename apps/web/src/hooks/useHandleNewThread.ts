@@ -25,6 +25,7 @@ import {
 } from "../logicalProject";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
+  readProject,
   readProjects,
   readThreadShell,
   readThreadShells,
@@ -133,6 +134,10 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
+      // Removal can land while the project file is read; a draft opened
+      // after that belongs to a project that no longer exists.
+      const projectRemovedSinceRequest = () =>
+        project !== undefined && readProject(projectRef) === null;
       // The resolver applies project overrides and, until the server has
       // folded them, the aggregate's own legacy fields.
       const projectSettings = resolveProjectSettings(
@@ -236,7 +241,7 @@ export function useNewThreadHandler() {
             workspaceContext = pickExplicitWorkspaceOptions(options);
           } else if (!isDraftAlreadyOpen) {
             const defaultEnvMode = await resolveDefaultEnvMode();
-            if (!isCurrent()) {
+            if (!isCurrent() || projectRemovedSinceRequest()) {
               return null;
             }
             // The await yields. If the draft was opened (a concurrent
@@ -375,7 +380,7 @@ export function useNewThreadHandler() {
       const createdAt = new Date().toISOString();
       return withNavigationGuard(router.history, async (isCurrent) => {
         const initialEnvMode = options?.envMode ?? (await resolveDefaultEnvMode());
-        if (!isCurrent()) {
+        if (!isCurrent() || projectRemovedSinceRequest()) {
           return null;
         }
         // The await yields, so a concurrent invocation may have registered a

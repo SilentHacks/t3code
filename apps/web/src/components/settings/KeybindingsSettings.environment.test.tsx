@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   searchTarget: "",
   primaryBindings: [] as ResolvedKeybindingsConfig,
   secondaryBindings: [] as ResolvedKeybindingsConfig,
+  connected: true,
   openEditor: vi.fn(),
   upsert: vi.fn(),
   remove: vi.fn(),
@@ -93,7 +94,9 @@ vi.mock("./SettingsScopeContext", () => ({
         availableEditors: [],
       },
     };
-    return { environment, connectedEnvironments: [environment] };
+    return state.connected
+      ? { environment, connectedEnvironments: [environment] }
+      : { environment: null, connectedEnvironments: [] };
   },
 }));
 
@@ -156,6 +159,7 @@ describe("KeybindingsSettings editor permission", () => {
     state.searchTarget = "";
     state.primaryBindings = [];
     state.secondaryBindings = [];
+    state.connected = true;
     state.openEditor.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
     state.upsert.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
     state.remove.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
@@ -360,5 +364,41 @@ describe("KeybindingsSettings editor permission", () => {
       environmentId: "secondary-settings",
       input: script,
     });
+  });
+});
+
+function noticeText(panel: unknown) {
+  const notice = visitElements(
+    panel,
+    (element) =>
+      element.type === "p" && element.props.className === "text-xs text-muted-foreground",
+  );
+  return notice?.props.children;
+}
+
+describe("KeybindingsSettings write notice", () => {
+  beforeEach(() => {
+    hooks.reset();
+    state.canWriteSettings = true;
+    state.connected = true;
+    state.primaryConnected = true;
+    state.remoteOnly = false;
+    state.ownerMissing = false;
+    state.searchTarget = "";
+  });
+
+  // The hosted app has no environment until one is paired, so the editor is
+  // locked for a missing connection, not a missing permission.
+  it("asks for a connected environment when none is connected", () => {
+    state.connected = false;
+    state.ownerMissing = true;
+    expect(noticeText(renderPanel())).toBe("Connect an environment to change keybindings.");
+  });
+
+  it("names the permission when the connection cannot write settings", () => {
+    state.canWriteSettings = false;
+    expect(noticeText(renderPanel())).toBe(
+      "This connection can view keybindings but cannot change them.",
+    );
   });
 });
