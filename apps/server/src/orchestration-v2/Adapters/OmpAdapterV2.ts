@@ -231,6 +231,10 @@ export function makeOmpAcpAdapterFlavor(options: OmpAdapterV2Options): AcpAdapte
     terminateRuntimeProcessGroupOnInterrupt: true,
     resolveModelId: (selection) => selection.model.trim(),
     extractSubagentUpdates: extractOmpSubagentUpdates,
+    // OMP finishes async jobs and replies to them after session/prompt
+    // returns; the lifecycle bridge relays those frames post-settle, and the
+    // reply projects as a continuation run. Root turns still settle at once.
+    enablePostSettleContinuation: true,
     ...(onAvailableCommandsUpdate === undefined
       ? {}
       : {

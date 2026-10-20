@@ -62,6 +62,19 @@ const options = () => [
     options:(model === 'Provider/Native-v1' ? ['low'] : ['high','max']).map(value=>({value,name:value}))}
 ];
 const send = x => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...x})+'\n');
+// Stands in for the T3 lifecycle-bridge extension OMP would load from --extension.
+let bridge;
+if (process.env.T3_OMP_BRIDGE_SOCKET && process.env.OMP_TEST_BRIDGE !== 'off') {
+  bridge = require('node:net').createConnection(process.env.T3_OMP_BRIDGE_SOCKET);
+  bridge.on('error', () => {});
+  bridge.write(JSON.stringify({t:'hello',token:process.env.T3_OMP_BRIDGE_TOKEN,protocol:1})+'\n');
+  readline.createInterface({input:bridge}).on('line', line => {
+    const message = JSON.parse(line);
+    if (message.t === 'prompt') bridge.write(JSON.stringify({t:'ack',seq:message.seq})+'\n');
+  });
+}
+const relay = (updates, id=sessionId) => bridge && bridge.write(JSON.stringify({t:'frames',sessionId:id,
+  notifications:updates.map(update=>({sessionId:id,update}))})+'\n');
 const update = (update, id=sessionId) => send({method:'session/update',params:{sessionId:id,update}});
 readline.createInterface({input:process.stdin}).on('line', line => {
   const {id,method,params} = JSON.parse(line);
@@ -91,6 +104,26 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     update({sessionUpdate:'compaction_update',compactionId:'omp-compact',status:'completed',summary:[{type:'text',text:'Native compaction summary'}]});
   }
   if (process.env.OMP_TEST_PROMPT === 'exit') return process.exit(3);
+  if (process.env.OMP_TEST_PROMPT === 'async-task') {
+    const running = {id:'bg-1',agent:'explore',task:'Inspect in background',status:'running',resolvedModelIdentity:model};
+    const asyncRunning = {state:'running',jobId:'job-1',type:'task'};
+    update({sessionUpdate:'tool_call',toolCallId:'async-task',title:'task',kind:'other',status:'in_progress',
+      rawOutput:{details:{projectAgentsDir:null,results:[],progress:[running],async:asyncRunning}}});
+    // OMP 18.12's stale terminal frame: wire status completed, job still running.
+    update({sessionUpdate:'tool_call_update',toolCallId:'async-task',status:'completed',
+      rawOutput:{details:{projectAgentsDir:null,results:[],progress:[running],async:asyncRunning}}});
+    reply({stopReason:'end_turn'});
+    setTimeout(() => {
+      relay([{sessionUpdate:'agent_message_chunk',messageId:'stray',content:{type:'text',text:'SUBAGENT_SESSION'}}], 'omp-subagent-session');
+      relay([
+        {sessionUpdate:'tool_call_update',toolCallId:'async-task',status:'completed',
+          rawOutput:{details:{projectAgentsDir:null,progress:[],async:{state:'completed',jobId:'job-1',type:'task'},
+            results:[{id:'bg-1',agent:'explore',task:'Inspect in background',exitCode:0,output:'Background done',resolvedModelIdentity:model}]}}},
+        {sessionUpdate:'agent_message_chunk',messageId:'t3-bridge:2:1',content:{type:'text',text:'Follow-up reply'}},
+      ]);
+    }, 150);
+    return;
+  }
   if (process.env.OMP_TEST_PROMPT === 'batch') {
     const agent = (id, status) => ({id,agent:'explore',task:'Inspect '+id,status,resolvedModelIdentity:model});
     update({sessionUpdate:'tool_call',toolCallId:'batch',title:'task',kind:'other',status:'in_progress',
@@ -152,6 +185,7 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
   const requests: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
   const promptSent = yield* Deferred.make<void>();
   const availableCommands: Array<ReadonlyArray<string>> = [];
+  const continuationRequests: Array<unknown> = [];
   const childProcessSpawner = ChildProcessSpawner.make((command) => {
     if (command._tag !== "StandardCommand") return underlying.spawn(command);
     launches.push(command);
@@ -165,6 +199,12 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
     environment,
     childProcessSpawner,
     selfInvocation: yield* resolveSelfInvocation(),
+    continuationRequests: {
+      offer: (request) =>
+        Effect.sync(() => {
+          continuationRequests.push(request);
+        }),
+    },
     onAvailableCommandsUpdate: (commands) =>
       Effect.sync(() => {
         availableCommands.push(commands.map((command) => command.name));
@@ -190,6 +230,7 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
     launches,
     promptSent,
     availableCommands,
+    continuationRequests,
   };
 });
 
@@ -422,6 +463,55 @@ describe("OMP display normalization", () => {
   });
 });
 
+describe("OMP lifecycle bridge", () => {
+  const subagentStatus = (event: { readonly type: string }) =>
+    event.type === "subagent.updated"
+      ? (event as unknown as { readonly subagent: { readonly status: string } }).subagent.status
+      : undefined;
+
+  it.live("closes an async task after the prompt settles and offers the follow-up reply", () =>
+    Effect.gen(function* () {
+      const harness = yield* openHarness({ environment: { OMP_TEST_PROMPT: "async-task" } });
+      yield* harness.runtime.startTurn(yield* turnInput(harness));
+      const events = yield* harness.runtime.events.pipe(
+        Stream.takeUntil((event) => subagentStatus(event) === "completed"),
+        Stream.runCollect,
+        Effect.timeout("10 seconds"),
+      );
+      const terminalIndex = events.findIndex((event) => event.type === "turn.terminal");
+      expect(terminalIndex).toBeGreaterThanOrEqual(0);
+      // The stale frame leaves the job open; only the relayed completion closes it.
+      expect(events.slice(0, terminalIndex).map(subagentStatus).filter(Boolean)).not.toContain(
+        "completed",
+      );
+      const completed = events.at(-1) as unknown as {
+        readonly subagent: { readonly nativeTaskRef?: { readonly nativeId: string } };
+      };
+      expect(completed.subagent.nativeTaskRef?.nativeId).toBe("bg-1");
+      yield* Effect.gen(function* () {
+        while (harness.continuationRequests.length === 0) yield* Effect.sleep("20 millis");
+      }).pipe(Effect.timeout("5 seconds"));
+      expect(encodeJson(events)).not.toContain("SUBAGENT_SESSION");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("keeps the stale-frame behavior when the extension never connects", () =>
+    Effect.gen(function* () {
+      const harness = yield* openHarness({
+        environment: { OMP_TEST_PROMPT: "async-task", OMP_TEST_BRIDGE: "off" },
+      });
+      yield* harness.runtime.startTurn(yield* turnInput(harness));
+      const events = yield* harness.runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      expect(events.map(subagentStatus).filter(Boolean)).not.toContain("completed");
+      yield* Effect.sleep("400 millis");
+      expect(harness.continuationRequests).toEqual([]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+});
+
 describe("OMP ACP wire integration", () => {
   it.live("projects distinct agents and terminal results from one native batch", () =>
     Effect.gen(function* () {
@@ -494,7 +584,14 @@ describe("OMP ACP wire integration", () => {
         expect(serialized).not.toContain("unrelated-session");
         expect(harness.availableCommands.at(-1)).toEqual(["compact"]);
         const launch = harness.launches[0];
-        expect(launch?.args).toEqual(["acp", "--approval-mode=yolo", "--profile", "work"]);
+        expect(launch?.args.slice(0, 4)).toEqual([
+          "acp",
+          "--approval-mode=yolo",
+          "--profile",
+          "work",
+        ]);
+        expect(launch?.args[4]).toBe("--extension");
+        expect(launch?.args[5]).toMatch(/t3-lifecycle-bridge\.ts$/);
         expect(launch?.options.detached).toBe((yield* HostProcess.Platform) !== "win32");
         expect(
           harness.requests.filter(
