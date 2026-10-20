@@ -4,6 +4,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
+  AuthTerminalOperateScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
@@ -47,6 +48,13 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksRunNow]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hostFilesList]: AuthTerminalOperateScope,
+  [WS_METHODS.hostFilesStat]: AuthTerminalOperateScope,
+  [WS_METHODS.hostFilesMkdir]: AuthTerminalOperateScope,
+  [WS_METHODS.hostFilesRename]: AuthTerminalOperateScope,
+  [WS_METHODS.hostFilesDelete]: AuthTerminalOperateScope,
+  [WS_METHODS.hostFilesCreateDownloadUrl]: AuthTerminalOperateScope,
+  [WS_METHODS.hostFilesCreateUploadUrl]: AuthTerminalOperateScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

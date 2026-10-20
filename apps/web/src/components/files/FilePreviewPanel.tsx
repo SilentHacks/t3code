@@ -76,6 +76,8 @@ import { AudioPreview } from "./AudioPreview";
 import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import FileBrowserPanel from "./FileBrowserPanel";
+import { HostFilesBrowser } from "./HostFilesBrowser";
+import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import {
@@ -136,6 +138,13 @@ interface FilePreviewPanelProps {
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
 const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
+const FILES_LOCATION_STORAGE_KEY = "t3code.filesLocation";
+const FilesLocation = Schema.Literals(["project", "server"]);
+
+function hostParentPath(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index <= 0 ? "/" : path.slice(0, index);
+}
 const RENDER_BROWSER_FILE_STORAGE_KEY = "t3code.renderBrowserFile";
 const RENDER_TABLE_STORAGE_KEY = "t3code.renderTable";
 // Shared by the read-only and annotated surfaces, so it is generic over annotation metadata.
@@ -1099,6 +1108,11 @@ export default function FilePreviewPanel({
   });
   // Reading markdown rendered is a preference, not a property of one file. Keeping
   // it on the panel meant a thread switch dropped it and forced source back.
+  const [filesLocation, setFilesLocation] = useLocalStorage(
+    FILES_LOCATION_STORAGE_KEY,
+    "project",
+    FilesLocation,
+  );
   const [renderMarkdownPreferred, setRenderMarkdownPreferred] = useLocalStorage(
     RENDER_MARKDOWN_STORAGE_KEY,
     false,
@@ -1487,19 +1501,48 @@ export default function FilePreviewPanel({
                 : "min-w-0 flex-1",
             )}
           >
-            <FileBrowserPanel
-              key={`${environmentId}:${cwd}`}
-              environmentId={environmentId}
-              cwd={cwd}
-              projectName={projectName}
-              selectedPath={relativePath}
-              selectedPathRevealId={revealRequestId}
-              onOpenFile={onOpenFile}
-              workspaceMutationId={workspaceMutationId}
-              {...(previewPath && !isMedia && !isPdf
-                ? { onRefreshSelectedFile: file.refresh }
-                : {})}
-            />
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center px-2 pt-1.5">
+                <ToggleGroup
+                  aria-label="Files location"
+                  variant="segmented"
+                  value={[filesLocation]}
+                  onValueChange={(next) => {
+                    if (next[0] === "project" || next[0] === "server") setFilesLocation(next[0]);
+                  }}
+                >
+                  <Toggle value="project">Project</Toggle>
+                  <Toggle value="server">Server</Toggle>
+                </ToggleGroup>
+              </div>
+              {filesLocation === "server" ? (
+                <HostFilesBrowser
+                  key={environmentId}
+                  environmentId={environmentId}
+                  initialPath={
+                    relativePath && isAbsolutePath(relativePath)
+                      ? hostParentPath(relativePath)
+                      : null
+                  }
+                  selectedPath={relativePath}
+                  onOpenFile={onOpenFile}
+                />
+              ) : (
+                <FileBrowserPanel
+                  key={`${environmentId}:${cwd}`}
+                  environmentId={environmentId}
+                  cwd={cwd}
+                  projectName={projectName}
+                  selectedPath={relativePath}
+                  selectedPathRevealId={revealRequestId}
+                  onOpenFile={onOpenFile}
+                  workspaceMutationId={workspaceMutationId}
+                  {...(previewPath && !isMedia && !isPdf
+                    ? { onRefreshSelectedFile: file.refresh }
+                    : {})}
+                />
+              )}
+            </div>
           </aside>
         ) : null}
       </div>

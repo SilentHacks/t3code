@@ -192,6 +192,7 @@ import {
 } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
+import * as HostFiles from "./hostFiles/HostFiles.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -2726,6 +2727,13 @@ const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.hostFilesList]: (input) => HostFiles.listHostDirectory(input),
+        [WS_METHODS.hostFilesStat]: (input) => HostFiles.statHostPath(input),
+        [WS_METHODS.hostFilesMkdir]: (input) => HostFiles.makeHostDirectory(input),
+        [WS_METHODS.hostFilesRename]: (input) => HostFiles.renameHostPath(input),
+        [WS_METHODS.hostFilesDelete]: (input) => HostFiles.deleteHostPaths(input),
+        [WS_METHODS.hostFilesCreateDownloadUrl]: (input) => HostFiles.createHostDownloadUrl(input),
+        [WS_METHODS.hostFilesCreateUploadUrl]: (input) => HostFiles.createHostUploadUrl(input),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),
         [WS_METHODS.agentSessionsScan]: () => agentSessionScanner.scan,

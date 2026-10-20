@@ -84,6 +84,19 @@ import {
   FilesystemBrowseError,
 } from "./filesystem.ts";
 import {
+  HostFileEntry,
+  HostFilesCreateDownloadUrlInput,
+  HostFilesCreateUploadUrlInput,
+  HostFilesDeleteInput,
+  HostFilesError,
+  HostFilesListInput,
+  HostFilesListResult,
+  HostFilesMkdirInput,
+  HostFilesRenameInput,
+  HostFilesStatInput,
+  HostFilesTransferUrl,
+} from "./hostFiles.ts";
+import {
   AgentSessionImportInput,
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
@@ -389,6 +402,15 @@ export const WS_METHODS = {
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
   filesystemGetMetadata: "filesystem.getMetadata",
+
+  // Host files (whole environment filesystem)
+  hostFilesList: "hostFiles.list",
+  hostFilesStat: "hostFiles.stat",
+  hostFilesMkdir: "hostFiles.mkdir",
+  hostFilesRename: "hostFiles.rename",
+  hostFilesDelete: "hostFiles.delete",
+  hostFilesCreateDownloadUrl: "hostFiles.createDownloadUrl",
+  hostFilesCreateUploadUrl: "hostFiles.createUploadUrl",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
@@ -1276,6 +1298,42 @@ const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   error: Schema.Union([FilesystemBrowseError, EnvironmentAuthorizationError]),
 });
 
+const HostFilesRpcError = Schema.Union([HostFilesError, EnvironmentAuthorizationError]);
+const WsHostFilesListRpc = Rpc.make(WS_METHODS.hostFilesList, {
+  payload: HostFilesListInput,
+  success: HostFilesListResult,
+  error: HostFilesRpcError,
+});
+const WsHostFilesStatRpc = Rpc.make(WS_METHODS.hostFilesStat, {
+  payload: HostFilesStatInput,
+  success: HostFileEntry,
+  error: HostFilesRpcError,
+});
+const WsHostFilesMkdirRpc = Rpc.make(WS_METHODS.hostFilesMkdir, {
+  payload: HostFilesMkdirInput,
+  success: HostFileEntry,
+  error: HostFilesRpcError,
+});
+const WsHostFilesRenameRpc = Rpc.make(WS_METHODS.hostFilesRename, {
+  payload: HostFilesRenameInput,
+  success: HostFileEntry,
+  error: HostFilesRpcError,
+});
+const WsHostFilesDeleteRpc = Rpc.make(WS_METHODS.hostFilesDelete, {
+  payload: HostFilesDeleteInput,
+  error: HostFilesRpcError,
+});
+const WsHostFilesCreateDownloadUrlRpc = Rpc.make(WS_METHODS.hostFilesCreateDownloadUrl, {
+  payload: HostFilesCreateDownloadUrlInput,
+  success: HostFilesTransferUrl,
+  error: HostFilesRpcError,
+});
+const WsHostFilesCreateUploadUrlRpc = Rpc.make(WS_METHODS.hostFilesCreateUploadUrl, {
+  payload: HostFilesCreateUploadUrlInput,
+  success: HostFilesTransferUrl,
+  error: HostFilesRpcError,
+});
+
 const WsAgentSessionsScanRpc = Rpc.make(WS_METHODS.agentSessionsScan, {
   payload: AgentSessionScanInput,
   success: AgentSessionScanResult,
@@ -1991,6 +2049,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsFilesystemGetMetadataRpc,
+  WsHostFilesListRpc,
+  WsHostFilesStatRpc,
+  WsHostFilesMkdirRpc,
+  WsHostFilesRenameRpc,
+  WsHostFilesDeleteRpc,
+  WsHostFilesCreateDownloadUrlRpc,
+  WsHostFilesCreateUploadUrlRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,

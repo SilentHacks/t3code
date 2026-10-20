@@ -1,5 +1,16 @@
 import * as Mime from "effect/http/Mime";
 import {
+  HOST_FILES_DOWNLOAD_ROUTE_PREFIX,
+  HOST_FILES_UPLOAD_ROUTE_PREFIX,
+} from "@t3tools/contracts";
+import {
+  statForDownload,
+  storeHostUpload,
+  streamDirectoryArchive,
+  validateHostDownloadToken,
+  validateHostUploadToken,
+} from "./hostFiles/HostFiles.ts";
+import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
@@ -503,6 +514,67 @@ export const layerAttachmentUploadRoute = HttpRouter.add(
     const stored = yield* storeAttachmentUpload(claims, Stream.fromPull(Effect.succeed(bodyPull)));
     return stored.ok
       ? HttpServerResponse.empty({ status: 204 })
+      : HttpServerResponse.text(stored.detail, { status: stored.status });
+  }),
+);
+
+const tokenFromPath = (pathname: string, prefix: string) => {
+  const token = pathname.slice(`${prefix}/`.length);
+  return token.length > 0 ? token : null;
+};
+
+// Host-file transfers: the signed token was issued over a terminal:operate RPC.
+export const layerHostFilesDownloadRoute = HttpRouter.add(
+  "GET",
+  `${HOST_FILES_DOWNLOAD_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const token = tokenFromPath(url.value.pathname, HOST_FILES_DOWNLOAD_ROUTE_PREFIX);
+    const claims = token === null ? null : yield* validateHostDownloadToken(token);
+    if (!claims) return HttpServerResponse.text("Not Found", { status: 404 });
+    const info = yield* statForDownload(claims.path);
+    if (info === null) return HttpServerResponse.text("Not Found", { status: 404 });
+    const baseName = claims.path.split("/").at(-1) || "root";
+    if (info.isDirectory()) {
+      return HttpServerResponse.stream(streamDirectoryArchive(claims.path), {
+        contentType: "application/gzip",
+        headers: {
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${baseName}.tar.gz`)}`,
+          "cache-control": "private, no-store",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
+    return yield* assetFileResponse(
+      { path: claims.path, download: true, fileName: baseName },
+      request.headers.range,
+      request.headers["if-range"],
+    ).pipe(
+      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
+    );
+  }),
+);
+
+export const layerHostFilesUploadRoute = HttpRouter.add(
+  "POST",
+  `${HOST_FILES_UPLOAD_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const token = tokenFromPath(url.value.pathname, HOST_FILES_UPLOAD_ROUTE_PREFIX);
+    const claims = token === null ? null : yield* validateHostUploadToken(token);
+    if (!claims) return HttpServerResponse.text("Not Found", { status: 404 });
+    const contentLength = request.headers["content-length"];
+    if (contentLength !== undefined && Number(contentLength) !== claims.sizeBytes) {
+      return HttpServerResponse.text("Content-Length must match the upload size.", { status: 400 });
+    }
+    const bodyPull = yield* Stream.toPull(request.stream);
+    const stored = yield* storeHostUpload(claims, Stream.fromPull(Effect.succeed(bodyPull)));
+    return stored.ok
+      ? HttpServerResponse.text(stored.path, { status: 201 })
       : HttpServerResponse.text(stored.detail, { status: stored.status });
   }),
 );
