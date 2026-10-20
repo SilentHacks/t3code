@@ -1,11 +1,21 @@
+import { PullRequestContextMetadata } from "@t3tools/contracts";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { Option, Schema } from "effect";
+
+export const COMPOSER_MENTION_DRAG_TYPE = "application/x-t3code-composer-mention";
 
 /**
- * Drag payload type carrying a serialized composer mention. Set on drags that
- * start in the workspace file tree or file tabs so the composer can tell them apart from
- * OS file drags and plain text selections.
+ * Drag payload type carrying a pull request, as JSON `PullRequestContextMetadata`. Set on drags
+ * that start on a pull request row; the composer drops it as the same chip the `#` picker adds.
  */
-export const COMPOSER_MENTION_DRAG_TYPE = "application/x-t3code-composer-mention";
+export const COMPOSER_PULL_REQUEST_DRAG_TYPE = "application/x-t3code-pull-request";
+
+const PullRequestDragPayload = Schema.fromJsonString(PullRequestContextMetadata);
+const decodePullRequestPayload = Schema.decodeUnknownOption(PullRequestDragPayload);
+
+/** The `COMPOSER_PULL_REQUEST_DRAG_TYPE` data for a pull request row's drag. */
+export const encodePullRequestDragPayload = Schema.encodeSync(PullRequestDragPayload);
+
 export const COMPOSER_MENTION_SOURCE_TYPE = "application/x-t3code-composer-mention-source";
 
 export function composerMentionFromFileTab(surface: {
@@ -36,7 +46,9 @@ export function composerMentionFromTreePath(treePath: string): string | null {
 }
 
 export function dataTransferHasComposerMention(types: ReadonlyArray<string>): boolean {
-  return types.includes(COMPOSER_MENTION_DRAG_TYPE);
+  return (
+    types.includes(COMPOSER_MENTION_DRAG_TYPE) || types.includes(COMPOSER_PULL_REQUEST_DRAG_TYPE)
+  );
 }
 
 export interface ComposerMentionDragTransfer {
@@ -54,15 +66,15 @@ export interface ComposerMentionDragEvent {
 }
 
 /**
- * What a mention drop is allowed to do to the composer. Deliberately narrow:
- * there is no way to focus the editor from here. Focusing it synchronously
- * during the drop makes the not-yet-reconciled editor sync its stale empty
- * state back over the inserted mention; the insert path already focuses on
- * the next frame, after the editor has caught up.
+ * Deliberately narrow: there is no way to focus the editor from here. Focusing
+ * it synchronously during the drop makes the not-yet-reconciled editor sync its
+ * stale empty state back over the inserted mention; the insert path already
+ * focuses on the next frame, after the editor has caught up.
  */
 export interface ComposerMentionDropHost {
   readonly sourceKey?: string;
   insertMentionAtEnd(text: string): boolean;
+  insertPullRequestAtEnd(pullRequest: PullRequestContextMetadata): boolean;
   setDragActive(active: boolean): void;
   onInsertRejected(reason: "busy" | "scope-mismatch"): void;
 }
@@ -98,7 +110,8 @@ export function makeComposerMentionDragHandlers(
       if (!claim(event)) {
         return;
       }
-      // The tree allows move only; file tabs copy references without removing the tab.
+      // The tree allows move only; file tabs copy; pull request links allow anything. Naming any
+      // other effect makes the browser cancel the drop without firing it.
       event.dataTransfer.dropEffect = event.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
       host.setDragActive(true);
     },
@@ -110,6 +123,15 @@ export function makeComposerMentionDragHandlers(
       const sourceKey = event.dataTransfer.getData(COMPOSER_MENTION_SOURCE_TYPE);
       if (sourceKey && sourceKey !== host.sourceKey) {
         host.onInsertRejected("scope-mismatch");
+        return;
+      }
+      if (event.dataTransfer.types.includes(COMPOSER_PULL_REQUEST_DRAG_TYPE)) {
+        const pullRequest = decodePullRequestPayload(
+          event.dataTransfer.getData(COMPOSER_PULL_REQUEST_DRAG_TYPE),
+        );
+        if (Option.isSome(pullRequest) && !host.insertPullRequestAtEnd(pullRequest.value)) {
+          host.onInsertRejected("busy");
+        }
         return;
       }
       const mention = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_TYPE);

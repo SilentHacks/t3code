@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 import type { OmpSettings, ProviderInstanceId } from "@t3tools/contracts";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";

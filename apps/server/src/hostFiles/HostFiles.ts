@@ -123,27 +123,26 @@ const statKind = (stats: {
   stats.isFile() ? "file" : stats.isDirectory() ? "directory" : "other";
 
 /** Describes a path without following it; symlinks report their target separately. */
-export const describeEntry = (path: string) =>
-  Effect.gen(function* () {
-    const stats = yield* fsCall(path, () => NodeFSP.lstat(path));
-    const base: {
-      -readonly [K in keyof HostFileEntry]: HostFileEntry[K];
-    } = {
-      name: NodePath.basename(path) || path,
-      path,
-      kind: stats.isSymbolicLink() ? "symlink" : statKind(stats),
-      modifiedAt: stats.mtime.toISOString(),
-      mode: (stats.mode & 0o7777).toString(8),
-    };
-    if (stats.isFile()) base.sizeBytes = stats.size;
-    if (stats.isSymbolicLink()) {
-      base.symlinkTarget = yield* Effect.promise(() => NodeFSP.readlink(path).catch(() => ""));
-      const target = yield* Effect.promise(() => NodeFSP.stat(path).catch(() => null));
-      base.targetKind = target === null ? null : statKind(target);
-      if (target?.isFile()) base.sizeBytes = target.size;
-    }
-    return base as HostFileEntry;
-  });
+export const describeEntry = Effect.fn("HostFiles.describeEntry")(function* (path: string) {
+  const stats = yield* fsCall(path, () => NodeFSP.lstat(path));
+  const base: {
+    -readonly [K in keyof HostFileEntry]: HostFileEntry[K];
+  } = {
+    name: NodePath.basename(path) || path,
+    path,
+    kind: stats.isSymbolicLink() ? "symlink" : statKind(stats),
+    modifiedAt: stats.mtime.toISOString(),
+    mode: (stats.mode & 0o7777).toString(8),
+  };
+  if (stats.isFile()) base.sizeBytes = stats.size;
+  if (stats.isSymbolicLink()) {
+    base.symlinkTarget = yield* Effect.promise(() => NodeFSP.readlink(path).catch(() => ""));
+    const target = yield* Effect.promise(() => NodeFSP.stat(path).catch(() => null));
+    base.targetKind = target === null ? null : statKind(target);
+    if (target?.isFile()) base.sizeBytes = target.size;
+  }
+  return base as HostFileEntry;
+});
 
 const sortEntries = (left: HostFileEntry, right: HostFileEntry) => {
   const leftDir = left.kind === "directory" || left.targetKind === "directory";
@@ -251,8 +250,6 @@ export const deleteHostPaths = Effect.fn("HostFiles.delete")(function* (
   );
 });
 
-// --- Signed transfer URLs ---------------------------------------------------
-
 const DownloadClaims = Schema.Struct({
   version: Schema.Literal(1),
   kind: Schema.Literal("host-file-download"),
@@ -284,23 +281,25 @@ const loadSecret = Effect.gen(function* () {
 const signToken = (encodedPayload: string, secret: Uint8Array) =>
   `${encodedPayload}.${signPayload(encodedPayload, secret)}`;
 
-const verifyToken = <A extends { readonly expiresAt: number }>(
-  token: string,
-  decode: (input: string) => Option.Option<A>,
-) =>
-  Effect.gen(function* () {
-    const [encodedPayload, signature, extra] = token.split(".");
-    if (!encodedPayload || !signature || extra !== undefined) return null;
-    const secret = yield* loadSecret.pipe(Effect.orElseSucceed(() => null));
-    if (!secret || !timingSafeEqualBase64Url(signature, signPayload(encodedPayload, secret))) {
-      return null;
-    }
-    const claims = yield* Effect.try(() =>
-      Option.getOrNull(decode(base64UrlDecodeUtf8(encodedPayload))),
-    ).pipe(Effect.orElseSucceed(() => null));
-    if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
-    return claims;
-  });
+const verifiedPayload = Effect.fn("HostFiles.verifiedPayload")(function* (token: string) {
+  const [encodedPayload, signature, extra] = token.split(".");
+  if (!encodedPayload || !signature || extra !== undefined) return null;
+  const secret = yield* loadSecret.pipe(Effect.orElseSucceed(() => null));
+  if (!secret || !timingSafeEqualBase64Url(signature, signPayload(encodedPayload, secret))) {
+    return null;
+  }
+  return yield* Effect.try(() => base64UrlDecodeUtf8(encodedPayload)).pipe(
+    Effect.orElseSucceed(() => null),
+  );
+});
+
+const liveClaims = <A extends { readonly expiresAt: number }>(
+  claims: Option.Option<A>,
+  now: number,
+): A | null => {
+  const value = Option.getOrNull(claims);
+  return value !== null && value.expiresAt > now ? value : null;
+};
 
 export const createHostDownloadUrl = Effect.fn("HostFiles.createDownloadUrl")(function* (
   input: HostFilesCreateDownloadUrlInput,
@@ -354,21 +353,35 @@ export const createHostUploadUrl = Effect.fn("HostFiles.createUploadUrl")(functi
   } satisfies HostFilesTransferUrl;
 });
 
-export const validateHostDownloadToken = (token: string) => verifyToken(token, decodeDownload);
-export const validateHostUploadToken = (token: string) => verifyToken(token, decodeUpload);
+export const validateHostDownloadToken = Effect.fn("HostFiles.validateDownloadToken")(function* (
+  token: string,
+) {
+  const payload = yield* verifiedPayload(token);
+  if (payload === null) return null;
+  return liveClaims(decodeDownload(payload), yield* Clock.currentTimeMillis);
+});
+
+export const validateHostUploadToken = Effect.fn("HostFiles.validateUploadToken")(function* (
+  token: string,
+) {
+  const payload = yield* verifiedPayload(token);
+  if (payload === null) return null;
+  return liveClaims(decodeUpload(payload), yield* Clock.currentTimeMillis);
+});
 
 /** `name (1).ext`, `name (2).ext`, ... — the first free sibling. */
-export const keepBothPath = (directory: string, name: string) =>
-  Effect.gen(function* () {
-    const extension = NodePath.extname(name);
-    const stem =
-      extension.length > 0 && extension !== name ? name.slice(0, -extension.length) : name;
-    for (let index = 1; index < 10_000; index += 1) {
-      const candidate = NodePath.join(directory, `${stem} (${index})${extension}`);
-      if (!(yield* pathExists(candidate))) return candidate;
-    }
-    return yield* hostFilesError("already_exists", NodePath.join(directory, name));
-  });
+export const keepBothPath = Effect.fn("HostFiles.keepBothPath")(function* (
+  directory: string,
+  name: string,
+) {
+  const extension = NodePath.extname(name);
+  const stem = extension.length > 0 && extension !== name ? name.slice(0, -extension.length) : name;
+  for (let index = 1; index < 10_000; index += 1) {
+    const candidate = NodePath.join(directory, `${stem} (${index})${extension}`);
+    if (!(yield* pathExists(candidate))) return candidate;
+  }
+  return yield* hostFilesError("already_exists", NodePath.join(directory, name));
+});
 
 export type HostUploadResult =
   | { readonly ok: true; readonly path: string }

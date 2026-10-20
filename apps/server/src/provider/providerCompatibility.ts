@@ -12,9 +12,6 @@ import packageJson from "../../package.json" with { type: "json" };
 // This fork ships V2 adapters under 0.0.45 preview tags, before upstream's V2 release.
 const compatibilityVersion =
   compareSemverVersions(packageJson.version, "0.0.46") < 0 ? "0.0.46" : packageJson.version;
-
-// Deliberately uses the shared CLI gate syntax: comparator groups joined by ||.
-// Prereleases and unrecognized release tags remain unknown.
 const StableVersion = TrimmedNonEmptyString.pipe(
   Schema.check(Schema.makeFilter((value) => /^\d+\.\d+\.\d+$/.test(value))),
 );
@@ -106,7 +103,6 @@ export function resolveProviderCompatibility(
   };
 }
 
-/** A remote policy replaces its matching bundled policy; omission keeps the bundle. */
 export function applyProviderCompatibility(
   snapshot: ServerProvider,
   policies: ReadonlyArray<ProviderCompatibilityPolicy> | undefined,
@@ -122,11 +118,20 @@ export function applyProviderCompatibility(
     ? (resolveProviderCompatibility(policies, snapshot.driver, latestVersion) ??
       resolveProviderCompatibility(fallback, snapshot.driver, latestVersion))
     : undefined;
+  const updateCommand = snapshot.versionAdvisory?.updateCommand;
+  // The maintenance resolver emits this command only for confirmed Homebrew installs.
+  const needsHomebrewRefresh =
+    updateCommand?.startsWith("brew upgrade ") &&
+    (advisory?.status === "unsupported" || advisory?.status === "broken") &&
+    (latestAdvisory?.status === "unsupported" || latestAdvisory?.status === "broken");
   return advisory
     ? {
         ...base,
         compatibilityAdvisory: {
           ...advisory,
+          message: needsHomebrewRefresh
+            ? `${advisory.message} Homebrew's local package metadata may be stale. Run brew update && ${updateCommand} on this environment's host, then refresh provider status.`
+            : advisory.message,
           ...(latestAdvisory ? { latestVersionStatus: latestAdvisory.status } : {}),
         },
       }

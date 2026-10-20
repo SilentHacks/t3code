@@ -36,7 +36,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type KeyboardEvent } from "react";
 
 import {
   AlertDialog,
@@ -60,6 +60,21 @@ import { hostFilesEnvironment, useHostFilesAccess } from "~/state/hostFiles";
 import { readPreparedConnection } from "~/state/session";
 
 let uploadSequence = 0;
+function nextUploadId(name: string): string {
+  uploadSequence += 1;
+  return `${name}:${uploadSequence}`;
+}
+
+/** Resolves to the failure message, or null when the upload finished or was cancelled. */
+async function settleUpload(done: Promise<unknown>): Promise<string | null> {
+  try {
+    await done;
+    return null;
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : "Upload failed";
+    return message === "Upload cancelled" ? null : message;
+  }
+}
 const SHOW_HIDDEN_STORAGE_KEY = "t3code:host-files:show-hidden";
 const LAST_PATH_STORAGE_KEY = "t3code:host-files:last-path";
 
@@ -191,100 +206,91 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
 
-  const navigate = useCallback(
-    async (path: string, options: { keepSelection?: boolean } = {}) => {
-      const current = ++generation.current;
-      setLoading(true);
-      const result = await runCommand(hostFilesEnvironment.list, {
-        environmentId,
-        input: { path },
-      });
-      if (current !== generation.current) return false;
-      setLoading(false);
-      if (result._tag === "Success") {
-        setListing(result.value);
-        setError(null);
-        setPathDraft(null);
-        setLastPath(result.value.path);
-        if (!options.keepSelection) {
-          setSelection(new Set());
-          setAnchor(null);
-        }
-        return true;
+  const navigate = async (path: string, options: { keepSelection?: boolean } = {}) => {
+    const current = ++generation.current;
+    setLoading(true);
+    const result = await runCommand(hostFilesEnvironment.list, {
+      environmentId,
+      input: { path },
+    });
+    if (current !== generation.current) return false;
+    setLoading(false);
+    if (result._tag === "Success") {
+      setListing(result.value);
+      setError(null);
+      setPathDraft(null);
+      setLastPath(result.value.path);
+      if (!options.keepSelection) {
+        setSelection(new Set());
+        setAnchor(null);
       }
-      setError(hostFilesFailureMessage(squashAtomCommandFailure(result), "Could not open folder."));
-      return false;
-    },
-    [environmentId, setLastPath],
-  );
+      return true;
+    }
+    setError(hostFilesFailureMessage(squashAtomCommandFailure(result), "Could not open folder."));
+    return false;
+  };
 
   const currentPath = listing?.path ?? null;
-  const refresh = useCallback(
-    () => (currentPath ? navigate(currentPath, { keepSelection: true }) : undefined),
-    [currentPath, navigate],
-  );
+  const refresh = () => (currentPath ? navigate(currentPath, { keepSelection: true }) : undefined);
 
-  const startPath = props.initialPath ?? lastPath;
+  // Navigate on mount and when asked to reveal a path; not on every visit.
+  const openStartPath = useEffectEvent(
+    (initialPath: string | null | undefined, _revealId: number | undefined) => {
+      const startPath = initialPath ?? lastPath;
+      void navigate(startPath).then((ok) => {
+        if (!ok && startPath !== "~") void navigate("~");
+      });
+    },
+  );
+  const revealId = props.initialPathRevealId;
   useEffect(() => {
     if (!canManage) return;
-    void navigate(startPath).then((ok) => {
-      if (!ok && startPath !== "~") void navigate("~");
+    // oxlint-disable-next-line react/set-state-in-effect -- loading a listing is an async server fetch that must start after mount.
+    openStartPath(props.initialPath, revealId);
+  }, [canManage, props.initialPath, revealId]);
+
+  const visibleEntries = (listing?.entries ?? []).filter(
+    (entry) => showHidden || !isHiddenHostEntry(entry),
+  );
+  const selectedEntries = visibleEntries.filter((entry) => selection.has(entry.path));
+
+  const openEntry = (entry: HostFileEntry) => {
+    if (isHostDirectoryEntry(entry)) void navigate(entry.path);
+    else if (entry.kind === "symlink" && entry.targetKind === null) {
+      toastManager.add({ type: "error", title: "Broken link", description: entry.symlinkTarget });
+    } else onOpenFile(entry.path);
+  };
+
+  const download = async (entry: HostFileEntry) => {
+    const result = await runCommand(hostFilesEnvironment.createDownloadUrl, {
+      environmentId,
+      input: { path: entry.path },
     });
-    // Navigate on mount and when asked to reveal a path; not on every visit.
-  }, [canManage, environmentId, props.initialPath, props.initialPathRevealId]);
-
-  const visibleEntries = useMemo(
-    () => (listing?.entries ?? []).filter((entry) => showHidden || !isHiddenHostEntry(entry)),
-    [listing, showHidden],
-  );
-  const selectedEntries = useMemo(
-    () => visibleEntries.filter((entry) => selection.has(entry.path)),
-    [visibleEntries, selection],
-  );
-
-  const openEntry = useCallback(
-    (entry: HostFileEntry) => {
-      if (isHostDirectoryEntry(entry)) void navigate(entry.path);
-      else if (entry.kind === "symlink" && entry.targetKind === null) {
-        toastManager.add({ type: "error", title: "Broken link", description: entry.symlinkTarget });
-      } else onOpenFile(entry.path);
-    },
-    [navigate, onOpenFile],
-  );
-
-  const download = useCallback(
-    async (entry: HostFileEntry) => {
-      const result = await runCommand(hostFilesEnvironment.createDownloadUrl, {
-        environmentId,
-        input: { path: entry.path },
+    if (result._tag !== "Success") {
+      toastManager.add({
+        type: "error",
+        title: "Download failed",
+        description: hostFilesFailureMessage(squashAtomCommandFailure(result), entry.path),
       });
-      if (result._tag !== "Success") {
-        toastManager.add({
-          type: "error",
-          title: "Download failed",
-          description: hostFilesFailureMessage(squashAtomCommandFailure(result), entry.path),
-        });
-        return;
-      }
-      const url = resolveTransferUrl(environmentId, result.value.relativeUrl);
-      if (!url) return;
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = result.value.name;
-      link.rel = "noopener";
-      document.body.append(link);
-      link.click();
-      link.remove();
-    },
-    [environmentId],
-  );
+      return;
+    }
+    const url = resolveTransferUrl(environmentId, result.value.relativeUrl);
+    if (!url) return;
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = result.value.name;
+    link.rel = "noopener";
+    document.body.append(link);
+    link.click();
+    link.remove();
+  };
 
-  const copyPath = useCallback(async (path: string) => {
+  const copyPath = async (path: string) => {
     await writeTextToClipboard(path);
     toastManager.add({ type: "success", title: "Path copied", description: path });
-  }, []);
+  };
 
-  const confirmDelete = useCallback(async () => {
+  const confirmDelete = async () => {
     const targets = pendingDelete;
     setPendingDelete(null);
     if (!targets || targets.length === 0) return;
@@ -300,9 +306,9 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
       });
     }
     void refresh();
-  }, [environmentId, pendingDelete, refresh]);
+  };
 
-  const submitRename = useCallback(async () => {
+  const submitRename = async () => {
     const entry = renaming;
     const name = renameDraft.trim();
     setRenaming(null);
@@ -323,9 +329,9 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
     }
     await refresh();
     setSelection(new Set([result.value.path]));
-  }, [currentPath, environmentId, refresh, renameDraft, renaming]);
+  };
 
-  const submitNewFolder = useCallback(async () => {
+  const submitNewFolder = async () => {
     const name = folderDraft.trim();
     setCreatingFolder(false);
     setFolderDraft("");
@@ -344,73 +350,65 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
     }
     await refresh();
     setSelection(new Set([result.value.path]));
-  }, [currentPath, environmentId, folderDraft, refresh]);
+  };
 
   const askConflict = (names: ReadonlyArray<string>) =>
     new Promise<HostFilesUploadConflict | null>((resolve) => setConflict({ names, resolve }));
 
-  const uploadFiles = useCallback(
-    async (files: ReadonlyArray<globalThis.File>) => {
-      if (!currentPath || files.length === 0) return;
-      const directory = currentPath;
-      const existing = new Set(listing?.entries.map((entry) => entry.name) ?? []);
-      const clashes = files.filter((file) => existing.has(file.name)).map((file) => file.name);
-      let policy: HostFilesUploadConflict = "fail";
-      if (clashes.length > 0) {
-        const choice = await askConflict(clashes);
-        if (choice === null) return;
-        policy = choice;
-      }
-      await Promise.all(
-        files.map(async (file) => {
-          const issued = await runCommand(hostFilesEnvironment.createUploadUrl, {
-            environmentId,
-            input: { directory, name: file.name, sizeBytes: file.size, conflict: policy },
+  const uploadFiles = async (files: ReadonlyArray<globalThis.File>) => {
+    if (!currentPath || files.length === 0) return;
+    const directory = currentPath;
+    const existing = new Set(listing?.entries.map((entry) => entry.name) ?? []);
+    const clashes = files.filter((file) => existing.has(file.name)).map((file) => file.name);
+    let policy: HostFilesUploadConflict = "fail";
+    if (clashes.length > 0) {
+      const choice = await askConflict(clashes);
+      if (choice === null) return;
+      policy = choice;
+    }
+    await Promise.all(
+      files.map(async (file) => {
+        const issued = await runCommand(hostFilesEnvironment.createUploadUrl, {
+          environmentId,
+          input: { directory, name: file.name, sizeBytes: file.size, conflict: policy },
+        });
+        if (issued._tag !== "Success") {
+          const failure = squashAtomCommandFailure(issued);
+          toastManager.add({
+            type: "error",
+            title: `Could not upload ${file.name}`,
+            description:
+              hostFilesFailureKind(failure) === "already_exists"
+                ? "A file with that name already exists."
+                : hostFilesFailureMessage(failure, "Upload failed."),
           });
-          if (issued._tag !== "Success") {
-            const failure = squashAtomCommandFailure(issued);
-            toastManager.add({
-              type: "error",
-              title: `Could not upload ${file.name}`,
-              description:
-                hostFilesFailureKind(failure) === "already_exists"
-                  ? "A file with that name already exists."
-                  : hostFilesFailureMessage(failure, "Upload failed."),
-            });
-            return;
-          }
-          const url = resolveTransferUrl(environmentId, issued.value.relativeUrl);
-          if (!url) return;
-          const id = `${file.name}:${++uploadSequence}`;
-          const transfer = postUpload(url, file, (progress) =>
-            setUploads((items) =>
-              items.map((item) => (item.id === id ? { ...item, progress } : item)),
-            ),
-          );
-          setUploads((items) => [
-            ...items,
-            { id, name: file.name, progress: 0, abort: transfer.abort },
-          ]);
-          try {
-            await transfer.done;
-          } catch (cause) {
-            const message = cause instanceof Error ? cause.message : "Upload failed";
-            if (message !== "Upload cancelled") {
-              toastManager.add({
-                type: "error",
-                title: `Could not upload ${file.name}`,
-                description: message,
-              });
-            }
-          } finally {
-            setUploads((items) => items.filter((item) => item.id !== id));
-          }
-        }),
-      );
-      if (generation.current > 0 && listing?.path === directory) void refresh();
-    },
-    [currentPath, environmentId, listing, refresh],
-  );
+          return;
+        }
+        const url = resolveTransferUrl(environmentId, issued.value.relativeUrl);
+        if (!url) return;
+        const id = nextUploadId(file.name);
+        const transfer = postUpload(url, file, (progress) =>
+          setUploads((items) =>
+            items.map((item) => (item.id === id ? { ...item, progress } : item)),
+          ),
+        );
+        setUploads((items) => [
+          ...items,
+          { id, name: file.name, progress: 0, abort: transfer.abort },
+        ]);
+        const uploadError = await settleUpload(transfer.done);
+        setUploads((items) => items.filter((item) => item.id !== id));
+        if (uploadError !== null) {
+          toastManager.add({
+            type: "error",
+            title: `Could not upload ${file.name}`,
+            description: uploadError,
+          });
+        }
+      }),
+    );
+    if (generation.current > 0 && listing?.path === directory) void refresh();
+  };
 
   const selectEntry = (
     entry: HostFileEntry,

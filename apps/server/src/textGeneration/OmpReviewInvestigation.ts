@@ -47,8 +47,8 @@ export const runOmpReviewInvestigation = Effect.fn("runOmpReviewInvestigation")(
   }
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = yield* HostProcess.Environment;
-  const git = (args: readonly string[]) =>
-    Effect.gen(function* () {
+  const git = Effect.fn("OmpReviewInvestigation.git")(
+    function* (args: readonly string[]) {
       const child = yield* spawner.spawn(
         ChildProcess.make(
           "git",
@@ -85,14 +85,14 @@ export const runOmpReviewInvestigation = Effect.fn("runOmpReviewInvestigation")(
         return yield* fail("OMP could not read bounded text evidence from this checkout.");
       }
       return stdout.text;
-    }).pipe(
-      Effect.scoped,
-      Effect.timeoutOrElse({
-        duration: 30_000,
-        orElse: () => Effect.fail(fail("OMP review evidence read timed out.")),
-      }),
-      Effect.mapError(() => fail("OMP could not read bounded text evidence from this checkout.")),
-    );
+    },
+    Effect.scoped,
+    Effect.timeoutOrElse({
+      duration: 30_000,
+      orElse: () => Effect.fail(fail("OMP review evidence read timed out.")),
+    }),
+    Effect.mapError(() => fail("OMP could not read bounded text evidence from this checkout.")),
+  );
   const head = (yield* git(["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"])).trim();
   const base = (yield* git([
     "rev-parse",

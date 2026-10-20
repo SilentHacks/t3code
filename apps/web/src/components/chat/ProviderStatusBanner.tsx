@@ -6,7 +6,6 @@ import { Button, InlineButton } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-/** OpenCode version advice is Settings-only; other drivers also warn in chat. */
 function getIncompatibleVersion(status: ServerProvider) {
   if (status.driver === "opencode") return null;
   const compatibility = status.compatibilityAdvisory;
@@ -60,7 +59,6 @@ export function hasProviderSetup(status: ServerProvider): boolean {
   );
 }
 
-/** For other drivers, broken-version guidance takes precedence over startup failures. */
 export function getProviderStatusMessage(status: ServerProvider): string {
   if (
     status.driver !== "opencode" &&

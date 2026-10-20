@@ -20,11 +20,11 @@ import * as Option from "effect/Option";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
-import { showConfirmDialog, showTextInputDialog } from "../../components/ConfirmDialogHost";
-import { EmptyState } from "../../components/EmptyState";
-import { ListRowLayout } from "../../components/ListRowLayout";
-import { ListSection } from "../../components/ListSection";
+import { AppText as Text } from "../../components/ui/AppText";
+import * as Dialog from "../../components/ui/Dialog";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { ListRowLayout } from "../../components/ui/ListRowLayout";
+import { ListSection } from "../../components/ui/ListSection";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { hostFilesEnvironment } from "../../state/hostFiles";
@@ -133,7 +133,7 @@ function ServerFiles(props: {
   };
 
   const promptRename = (entry: HostFileEntry) =>
-    showTextInputDialog({
+    Dialog.prompt({
       title: "Rename or move",
       initialValue: entry.name,
       confirmText: "Rename",
@@ -150,7 +150,7 @@ function ServerFiles(props: {
     });
 
   const promptDelete = (entry: HostFileEntry) =>
-    showConfirmDialog({
+    Dialog.confirm({
       title: `Delete "${entry.name}" permanently?`,
       message:
         entry.kind === "directory"
@@ -190,7 +190,7 @@ function ServerFiles(props: {
   };
 
   const promptNewFolder = () =>
-    showTextInputDialog({
+    Dialog.prompt({
       title: "New folder",
       initialValue: "",
       confirmText: "Create",
@@ -207,7 +207,7 @@ function ServerFiles(props: {
     });
 
   const promptGoTo = () =>
-    showTextInputDialog({
+    Dialog.prompt({
       title: "Go to path",
       initialValue: displayHostPath(currentPath ?? "~", listing?.homePath ?? null),
       confirmText: "Open",

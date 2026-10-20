@@ -113,8 +113,8 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
           if (exceeded) yield* reject("OMP text generation exceeded the output limit.");
         }),
       );
-      const promptJson = <T extends Schema.Top>(prompt: string, outputSchema: T) =>
-        Effect.gen(function* () {
+      const promptJson = Effect.fn("OmpTextGeneration.promptJson")(
+        function* <T extends Schema.Top>(prompt: string, outputSchema: T) {
           const raw = yield* Effect.gen(function* () {
             const started = yield* runtime.start();
             sessionId = started.sessionId;
@@ -198,11 +198,11 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
                 }),
             ),
           );
-        }).pipe(
-          Effect.mapError((cause) =>
-            isTextGenerationError(cause) ? cause : fail("OMP text generation failed."),
-          ),
-        );
+        },
+        Effect.mapError((cause) =>
+          isTextGenerationError(cause) ? cause : fail("OMP text generation failed."),
+        ),
+      );
       return input.investigate
         ? yield* runOmpReviewInvestigation(input, promptJson).pipe(
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
