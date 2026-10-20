@@ -7,6 +7,9 @@ import { ChildProcessSpawner } from "effect/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import * as Exit from "effect/Exit";
+
+import { makeOmpLifecycleBridge } from "./OmpLifecycleBridge.ts";
 
 export type OmpAcpRuntimeSettings = Pick<OmpSettings, "binaryPath" | "profile">;
 
@@ -51,6 +54,10 @@ export function buildOmpAcpSpawnInput(
   environment?: NodeJS.ProcessEnv,
   runtimeMode?: RuntimeMode,
   disableTools?: boolean,
+  bridge?: {
+    readonly spawnArgs: ReadonlyArray<string>;
+    readonly environment: Readonly<Record<string, string>>;
+  },
 ): AcpSessionRuntime.AcpSpawnInput {
   const profile = ompSettings.profile.trim();
   return {
@@ -58,9 +65,10 @@ export function buildOmpAcpSpawnInput(
     args: [
       ...ompAcpSpawnArgs(runtimeMode, disableTools),
       ...(profile ? ["--profile", profile] : []),
+      ...(bridge?.spawnArgs ?? []),
     ],
     cwd,
-    env: { ...process.env, ...environment },
+    env: { ...process.env, ...environment, ...bridge?.environment },
   };
 }
 
@@ -74,12 +82,15 @@ export const makeOmpAcpRuntime = Effect.fnUntraced(function* (input: OmpAcpRunti
     clientCapabilities,
     ...runtimeOptions
   } = input;
+  // Unattended helpers run with --no-extensions and never outlive their prompt.
+  const bridge = disableTools ? undefined : yield* makeOmpLifecycleBridge;
   const spawn = buildOmpAcpSpawnInput(
     ompSettings,
     input.cwd,
     environment,
     runtimeMode,
     disableTools,
+    bridge,
   );
   const platform = input.processGroupPlatform ?? (yield* HostProcess.Platform);
   const ownsProcessGroup = input.ownDetachedProcessGroup ?? platform !== "win32";
@@ -124,12 +135,31 @@ export const makeOmpAcpRuntime = Effect.fnUntraced(function* (input: OmpAcpRunti
   );
   return {
     ...runtime,
+    handleSessionUpdate: (handler) =>
+      runtime
+        .handleSessionUpdate(handler)
+        .pipe(
+          Effect.andThen(bridge === undefined ? Effect.void : bridge.handleSessionUpdate(handler)),
+        ),
     prompt: (payload, promptOptions?) =>
       promptGate.withPermit(
         Effect.gen(function* () {
           const started = yield* runtime.start();
           promptOutput = { sessionId: started.sessionId, root: false, foreign: false };
-          const result = yield* runtime.prompt(payload, promptOptions);
+          if (bridge !== undefined) {
+            yield* bridge.setRootSession(started.sessionId);
+            yield* bridge.promptBoundary({ active: true });
+          }
+          const result = yield* runtime.prompt(payload, promptOptions).pipe(
+            Effect.onExit((exit) =>
+              bridge === undefined
+                ? Effect.void
+                : bridge.promptBoundary({
+                    active: false,
+                    cancelled: !Exit.isSuccess(exit) || exit.value.stopReason === "cancelled",
+                  }),
+            ),
+          );
           // OMP 18.6 can move a contested journal without announcing its new ACP ID.
           // Never adopt foreign output or report a successful, invisible reply.
           if (result.stopReason !== "cancelled" && promptOutput.foreign && !promptOutput.root) {
