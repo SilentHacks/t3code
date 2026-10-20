@@ -77,6 +77,7 @@ import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import FileBrowserPanel from "./FileBrowserPanel";
 import { HostFilesBrowser } from "./HostFilesBrowser";
+import { FILES_LOCATION_STORAGE_KEY, FilesLocation } from "./filesLocation";
 import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
@@ -138,8 +139,6 @@ interface FilePreviewPanelProps {
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
 const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
-const FILES_LOCATION_STORAGE_KEY = "t3code.filesLocation";
-const FilesLocation = Schema.Literals(["project", "server"]);
 
 function hostParentPath(path: string): string {
   const index = path.lastIndexOf("/");

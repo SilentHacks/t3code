@@ -84,7 +84,7 @@ interface LocalStorageChangeDetail {
   key: string;
 }
 
-function dispatchLocalStorageChange(key: string) {
+export function dispatchLocalStorageChange(key: string) {
   if (typeof window === "undefined") return;
   try {
     window.dispatchEvent(
