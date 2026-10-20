@@ -50,6 +50,7 @@ import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboarding
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
 import { AttachmentFileScreen } from "./features/files/AttachmentFileScreen";
 import { ThreadFilesTreeScreen, ThreadFileScreen } from "./features/files/ThreadFilesRouteScreen";
+import { ServerFilesRouteScreen } from "./features/files/ServerFilesRouteScreen";
 import { AdaptiveWorkspaceLayout } from "./features/layout/AdaptiveWorkspaceLayout";
 import { selectedPullRequestKey } from "./features/pull-requests/pullRequestSelection";
 import {
@@ -241,6 +242,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsEnvironmentDetailRouteScreen,
       linking: "environments/:environmentId",
       options: { title: "Environment" },
+    }),
+    SettingsEnvironmentFiles: createNativeStackScreen({
+      screen: ServerFilesRouteScreen,
+      linking: "environments/:environmentId/files",
+      options: { title: "Server files" },
     }),
     SettingsEnvironmentNewThreads: createNativeStackScreen({
       screen: SettingsEnvironmentNewThreadsRouteScreen,
