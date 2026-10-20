@@ -670,6 +670,11 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
               onClick={(event) => {
                 listRef.current?.focus();
                 selectEntry(entry, event);
+                // Files preview on a plain click like the project tree; folders open on
+                // double-click so they can still be selected for actions.
+                if (!directory && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+                  openEntry(entry);
+                }
               }}
               onDoubleClick={() => openEntry(entry)}
               onContextMenu={() => {
