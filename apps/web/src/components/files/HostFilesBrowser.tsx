@@ -187,6 +187,8 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
 
   const navigate = useCallback(
@@ -702,7 +704,12 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
               <span className="hidden w-24 shrink-0 truncate text-right text-xs text-muted-foreground md:inline">
                 {formatModified(entry.modifiedAt)}
               </span>
-              <span className="flex opacity-0 group-hover:opacity-100 has-aria-expanded:opacity-100">
+              <span
+                className="flex opacity-0 group-hover:opacity-100 has-aria-expanded:opacity-100"
+                // Menu items render in a portal, but React still bubbles their events to this row.
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+              >
                 <Menu>
                   <MenuTrigger
                     render={
@@ -824,7 +831,7 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
       </AlertDialog>
 
       <AlertDialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
-        <AlertDialogPopup>
+        <AlertDialogPopup initialFocus={renameInputRef}>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -838,6 +845,7 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
               </AlertDialogDescription>
               <Input
                 autoFocus
+                ref={renameInputRef}
                 aria-label="New name"
                 value={renameDraft}
                 onChange={(event) => setRenameDraft(event.currentTarget.value)}
@@ -854,7 +862,7 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
       </AlertDialog>
 
       <AlertDialog open={creatingFolder} onOpenChange={(open) => !open && setCreatingFolder(false)}>
-        <AlertDialogPopup>
+        <AlertDialogPopup initialFocus={folderInputRef}>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -868,6 +876,7 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
               </AlertDialogDescription>
               <Input
                 autoFocus
+                ref={folderInputRef}
                 aria-label="Folder name"
                 value={folderDraft}
                 placeholder="untitled folder"
