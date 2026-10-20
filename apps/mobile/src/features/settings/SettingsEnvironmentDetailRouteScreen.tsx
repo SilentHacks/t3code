@@ -3,6 +3,7 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  AuthTerminalOperateScope,
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -24,6 +25,7 @@ import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow
 import { EnvironmentRoutesSection } from "./EnvironmentRoutesSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import {
   canMaintainEnvironment,
@@ -58,6 +60,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const sessionResult = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   const updateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
   const updateServer = useAtomCommand(serverEnvironment.updateServer);
+  const canBrowseFiles = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders);
   const [connectionExpanded, setConnectionExpanded] = useState(false);
@@ -206,6 +209,20 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 })
               }
             />
+            {connected && canBrowseFiles ? (
+              <SettingsSection title="Files">
+                <SettingsRow
+                  icon="internaldrive"
+                  label="Browse server files"
+                  onPress={() =>
+                    navigation.navigate("SettingsSheet", {
+                      screen: "SettingsContent",
+                      params: { screen: "SettingsEnvironmentFiles", params: { environmentId } },
+                    })
+                  }
+                />
+              </SettingsSection>
+            ) : null}
             {!connected ? (
               <Text className="px-2 text-sm text-foreground-muted">
                 Connect this environment to manage it.

@@ -73,6 +73,7 @@ import {
   MoonIcon,
   PaletteIcon,
   RotateCcwIcon,
+  HardDriveIcon,
   SettingsIcon,
   SquarePenIcon,
   SunIcon,
@@ -119,6 +120,7 @@ import {
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
+import { setFilesLocation } from "./files/filesLocation";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
@@ -1983,6 +1985,26 @@ function OpenCommandPaletteDialog(props: {
         },
       });
     }
+    actionItems.push({
+      kind: "action",
+      value: "action:browse-server-files",
+      searchTerms: [
+        "server",
+        "files",
+        "browse",
+        "open path",
+        "filesystem",
+        "upload",
+        "download",
+        "vps",
+      ],
+      title: "Browse server files",
+      icon: <HardDriveIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        setFilesLocation("server");
+        useRightPanelStore.getState().open(threadRef, "files");
+      },
+    });
   }
 
   if (activeThread !== null) {
