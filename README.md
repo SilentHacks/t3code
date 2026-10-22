@@ -1,4 +1,53 @@
-# T3 Code
+# T3 Code — SilentHacks fork
+
+This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code),
+regularly merged with upstream main. It keeps T3 Code's web, Electron desktop, and
+mobile architecture while adding:
+
+- **Oh My Pi (OMP) on V2 orchestration:** an ACP-backed provider with profiles,
+  model discovery, usage tracking, session resume, elicitation, and a lifecycle
+  bridge for background-job completions after a prompt returns. OMP also powers
+  isolated text-generation and review helpers. [OMP setup](docs/user/providers-omp.md).
+- **Server files:** browse and manage the environment host's filesystem, not only
+  the current project, from the web/desktop Files panel or mobile environment
+  settings. Access requires `terminal:operate`; permanent deletion requires confirmation.
+- **Settle and start a new thread:** one action in the command palette, keyboard
+  shortcuts, and mobile thread menu, retaining the current project.
+- **Composer file references:** add files from panel tabs through drag-and-drop or
+  their context menu without moving the source tab.
+- **Remote-only shortcut ownership:** application bindings have a stable owner even
+  when the desktop's Local environment is off.
+
+## Running this fork
+
+Use a build from this fork, not the upstream installers below. Install and
+authenticate OMP separately **on the environment host**, then configure **Oh My Pi**
+in Settings → Providers. OMP is not bundled with the desktop app.
+
+For a separate VPS, run the fork's server there too: upgrading the Mac app does
+not upgrade a remote server. Use matching fork clients and servers; the hosted
+upstream web app and App Store clients may use a different wire protocol.
+
+The [Ubuntu server installer](scripts/install-fork-server.sh) installs a separate
+`t3-omp` launcher and state directory without replacing a stock T3 installation.
+
+To build a Mac ARM64 DMG from source, install the repository's pinned Node/Vite+
+toolchain, Rust, and Xcode command-line tools, copy `.env.example` to `.env` for
+public Connect configuration, then run:
+
+```bash
+vp i
+vp run dist:desktop:dmg:arm64 --build-version 0.0.46-preview.YYYYMMDD.N
+```
+
+Replace the date and build number before running. Preview builds omit upstream's
+automatic-update feed so an upstream release does not overwrite fork features.
+Local builds are ad-hoc signed, not Apple-notarized releases.
+
+## About upstream
+
+The following installation instructions and project links describe **upstream T3
+Code**, not this fork's binaries or support policy.
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
 

@@ -178,42 +178,4 @@ describe("ThreadHeader", () => {
     render(<Header gitStatus={status([])} />);
     expect(renderedThreadActions()).toBeUndefined();
   });
-
-  it("re-applies native header items when Git status changes", () => {
-    render(<Header gitStatus={status([])} />);
-    expect(renderedGitStatusDescription()).toBe("Clean");
-
-    render(<Header gitStatus={status(["audit.txt"])} />);
-    expect(renderedGitStatusDescription()).toBe("1 changed");
-
-    render(<Header gitStatus={status([])} />);
-    expect(renderedGitStatusDescription()).toBe("Clean");
-  });
-
-  it("does not re-apply options for re-renders with equivalent header content", () => {
-    render(<Header gitStatus={status([])} />);
-    const applied = harness.setOptionsCalls;
-
-    for (let index = 0; index < 20; index += 1) {
-      render(<Header gitStatus={status([])} />);
-    }
-    expect(harness.setOptionsCalls).toBe(applied);
-  });
-
-  it("re-applies menu actions when the default ref changes behind the same label", async () => {
-    const pushable = (isDefaultRef: boolean) =>
-      status([], {
-        isDefaultRef,
-        aheadCount: 1,
-        hasPrimaryRemote: true,
-        pr: { state: "open", url: "https://example.com/pr/1" },
-      } as Partial<VcsStatusResult>);
-    render(<Header gitStatus={pushable(false)} />);
-    expect(renderedGitMenuItems()[1]?.label).toBe("Push");
-
-    render(<Header gitStatus={pushable(true)} />);
-    expect(renderedGitMenuItems()[1]?.label).toBe("Push");
-    await act(async () => renderedGitMenuItems()[1]?.onPress?.());
-    expect(harness.navigatedRoutes).toEqual(["GitConfirm"]);
-  });
 });

@@ -56,6 +56,30 @@ describe("compatibility banners", () => {
     ).toBeNull();
   });
 
+  it.each(["unsupported", "broken"] as const)(
+    "keeps %s OpenCode versions out of healthy chats",
+    (status) => {
+      const opencode: ServerProvider = {
+        ...provider,
+        driver: ProviderDriverKind.make("opencode"),
+        compatibilityAdvisory: { ...provider.compatibilityAdvisory!, status },
+      };
+      expect(getProviderStatusBannerKey(opencode)).toBeNull();
+      const failed: ServerProvider = { ...opencode, status: "error", message: "Connection lost" };
+      expect(shouldShowProviderStatusBanner(failed, getProviderStatusBannerKey(opencode))).toBe(
+        true,
+      );
+      expect(getProviderStatusMessage(failed)).toBe("Connection lost");
+      expect(
+        getProviderStatusMessage({
+          ...failed,
+          message: undefined,
+          auth: { status: "unauthenticated" },
+        }),
+      ).toBe("Sign in via the CLI to authenticate again.");
+    },
+  );
+
   it("keeps OpenCode startup failures visible without substituting version advice", () => {
     const message = "This provider version is known to be incompatible. Use 1.14.19.";
     const broken: ServerProvider = {
@@ -107,44 +131,6 @@ describe("compatibility banners", () => {
     ).toBe(broken.message);
     expect(getProviderStatusMessage({ ...broken, auth: { status: "unauthenticated" } })).toBe(
       broken.message,
-    );
-  });
-
-  it.each(["unsupported", "broken"] as const)(
-    "keeps %s OpenCode versions out of healthy chats",
-    (status) => {
-      const opencode: ServerProvider = {
-        ...provider,
-        driver: ProviderDriverKind.make("opencode"),
-        compatibilityAdvisory: { ...provider.compatibilityAdvisory!, status },
-      };
-      expect(getProviderStatusBannerKey(opencode)).toBeNull();
-      const failed: ServerProvider = { ...opencode, status: "error", message: "Connection lost" };
-      expect(shouldShowProviderStatusBanner(failed, getProviderStatusBannerKey(opencode))).toBe(
-        true,
-      );
-      expect(getProviderStatusMessage(failed)).toBe("Connection lost");
-      expect(
-        getProviderStatusMessage({
-          ...failed,
-          message: undefined,
-          auth: { status: "unauthenticated" },
-        }),
-      ).toBe("Sign in via the CLI to authenticate again.");
-    },
-  );
-
-  it("keeps authentication failures ahead of compatibility warnings even without a probe message", () => {
-    const unauthenticated: ServerProvider = {
-      ...provider,
-      status: "error",
-      auth: { status: "unauthenticated" },
-    };
-    expect(getProviderStatusMessage(unauthenticated)).toBe(
-      "Sign in via the CLI to authenticate again.",
-    );
-    expect(getProviderStatusMessage({ ...unauthenticated, message: "Credentials expired" })).toBe(
-      "Credentials expired",
     );
   });
 });

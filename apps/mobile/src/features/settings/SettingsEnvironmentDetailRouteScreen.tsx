@@ -18,12 +18,14 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { environmentSession, useEnvironmentScope, readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
 import { EnvironmentRoutesSection } from "./EnvironmentRoutesSection";
+import { OutdatedServerUpdateSection } from "./OutdatedServerUpdateSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsRow } from "./components/SettingsRow";
@@ -60,6 +62,9 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const session = useAtomValue(environmentSession.sessionStateValueAtom(environmentId));
   const sessionResult = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   const updateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
+  const outdated =
+    useAtomValue(environmentPresentations.presentationAtom(environmentId))?.entry
+      .serverUpdateRequired === true;
   const updateServer = useAtomCommand(serverEnvironment.updateServer);
   const canBrowseFiles = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider);
@@ -223,7 +228,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 />
               </SettingsSection>
             ) : null}
-            {!connected ? (
+            {outdated ? (
+              <OutdatedServerUpdateSection
+                environmentId={environmentId}
+                label={environment.environmentLabel}
+              />
+            ) : !connected ? (
               <Text className="px-2 text-sm text-foreground-muted">
                 Connect this environment to manage it.
               </Text>
@@ -242,7 +252,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               </Text>
             ) : null}
             {notice ? <Text className="px-2 text-sm text-foreground-muted">{notice}</Text> : null}
-            {config ? (
+            {config && !outdated ? (
               <>
                 <SettingsSection title="T3 Code">
                   <View className="gap-1 p-4">
