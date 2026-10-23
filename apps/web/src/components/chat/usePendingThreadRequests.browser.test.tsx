@@ -32,6 +32,8 @@ import {
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { usePendingThreadRequests } from "./usePendingThreadRequests";
 
+const encodeCommand = Schema.encodeSync(Schema.toCodecJson(OrchestrationV2Command));
+
 type Requests = ReturnType<typeof usePendingThreadRequests>;
 
 function Probe({
@@ -66,7 +68,7 @@ function Probe({
 function setup(id: string, multiSelect = false, required = false) {
   command.run.mockReset().mockImplementation(async ({ input }) => {
     try {
-      const encoded = Schema.encodeSync(Schema.toCodecJson(OrchestrationV2Command))({
+      const encoded = encodeCommand({
         type: "runtime-request.respond",
         commandId: CommandId.make("answer-command"),
         ...input,
@@ -167,7 +169,7 @@ const options = { router: false } as const;
 
 it.each(["", "  \t"])("submits a choice with blank Other (%j) as valid JSON", async (other) => {
   const fixture = setup(`choice-${other.length}`);
-  await using screen = await render(fixture.probe, options);
+  await using _screen = await render(fixture.probe, options);
   await act(() => fixture.requests.onSelectActivePendingUserInputOption("q0", " first\t"));
   await act(() => fixture.requests.onChangeActivePendingUserInputCustomAnswer("q0__other", other));
   await act(() => fixture.requests.onAdvanceActivePendingUserInput());
@@ -181,7 +183,7 @@ it.each(["", "  \t"])("submits a choice with blank Other (%j) as valid JSON", as
 
 it("submits only Other without adding an undefined choice", async () => {
   const fixture = setup("custom-only");
-  await using screen = await render(fixture.probe, options);
+  await using _screen = await render(fixture.probe, options);
   await act(() =>
     fixture.requests.onChangeActivePendingUserInputCustomAnswer("q0__other", "Custom target"),
   );
@@ -196,7 +198,7 @@ it("submits only Other without adding an undefined choice", async () => {
 
 it("preserves multi-select values while omitting Other", async () => {
   const fixture = setup("multi-select", true);
-  await using screen = await render(fixture.probe, options);
+  await using _screen = await render(fixture.probe, options);
   await act(() => fixture.requests.onSelectActivePendingUserInputOption("q0", " first\t"));
   await act(() => fixture.requests.onSelectActivePendingUserInputOption("q0", "second"));
   await act(() => fixture.requests.onAdvanceActivePendingUserInput());
@@ -209,7 +211,7 @@ it("preserves multi-select values while omitting Other", async () => {
 
 it("still checks attachment preparation for an omitted answer before dispatch", async () => {
   const fixture = setup("attachment-preparation");
-  await using screen = await render(fixture.probe, options);
+  await using _screen = await render(fixture.probe, options);
   await act(() => fixture.requests.onSelectActivePendingUserInputOption("q0", " first\t"));
   await act(() => fixture.requests.onAdvanceActivePendingUserInput());
   const advance = fixture.requests.onAdvanceActivePendingUserInput;
@@ -230,7 +232,7 @@ it("still checks attachment preparation for an omitted answer before dispatch", 
 
 it("does not submit a missing required answer", async () => {
   const fixture = setup("required-answer", false, true);
-  await using screen = await render(fixture.probe, options);
+  await using _screen = await render(fixture.probe, options);
   await act(() => fixture.requests.onAdvanceActivePendingUserInput());
   await act(() => fixture.requests.onAdvanceActivePendingUserInput());
   expect(command.run).not.toHaveBeenCalled();
