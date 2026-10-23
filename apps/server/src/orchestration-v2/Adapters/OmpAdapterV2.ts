@@ -1,5 +1,4 @@
 import {
-  defaultInstanceIdForDriver,
   OmpSettings,
   ProviderDriverKind,
   type OrchestrationV2ProviderCapabilities,
@@ -40,8 +39,7 @@ import {
   type AcpAdapterV2SubagentUpdate,
 } from "@t3tools/provider-acp/server/adapter";
 
-export const OMP_PROVIDER = ProviderDriverKind.make("omp");
-export const OMP_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OMP_PROVIDER);
+const OMP_PROVIDER = ProviderDriverKind.make("omp");
 const DEFAULT_OMP_SETTINGS = Schema.decodeSync(OmpSettings)({});
 const decodeOmpSettings = Schema.decodeEffect(OmpSettings);
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);

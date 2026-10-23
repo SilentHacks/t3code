@@ -37,7 +37,7 @@ public Connect configuration, then run:
 
 ```bash
 vp i
-vp run dist:desktop:dmg:arm64 --build-version 0.1.1-preview.YYYYMMDD.N
+vp run dist:desktop:dmg:arm64 --build-version 0.1.2-preview.YYYYMMDD.N
 ```
 
 Replace the date and build number before running. Preview builds omit upstream's

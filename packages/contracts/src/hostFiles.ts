@@ -7,7 +7,7 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 const HOST_FILES_PATH_MAX_LENGTH = 4096;
 export const HOST_FILES_LIST_LIMIT = 5_000;
-export const HOST_FILES_DELETE_BATCH_LIMIT = 256;
+const HOST_FILES_DELETE_BATCH_LIMIT = 256;
 export const HOST_FILES_TRANSFER_URL_TTL_MS = 15 * 60_000;
 export const HOST_FILES_DOWNLOAD_ROUTE_PREFIX = "/api/host-files/download";
 export const HOST_FILES_UPLOAD_ROUTE_PREFIX = "/api/host-files/upload";

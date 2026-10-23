@@ -118,13 +118,11 @@ export const primaryServerProvidersAtom = Atom.make(
     get(primaryServerConfigAtom)?.providers ?? EMPTY_SERVER_PROVIDERS,
 ).pipe(Atom.withLabel("web-primary-server-providers"));
 
-export const applicationKeybindingsAtom = createApplicationKeybindingsAtom({
+// Shortcut consumers share this owner, including clients without a primary server.
+export const primaryServerKeybindingsAtom = createApplicationKeybindingsAtom({
   environmentIdAtom: applicationKeybindingsEnvironmentIdAtom,
   serverConfigValueAtom: serverEnvironment.configValueAtom,
 });
-
-// Existing shortcut consumers share this owner, including clients without a primary server.
-export const primaryServerKeybindingsAtom = applicationKeybindingsAtom;
 
 export const primaryServerAvailableEditorsAtom = Atom.make(
   (get): ReadonlyArray<EditorId> =>

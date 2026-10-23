@@ -6,8 +6,9 @@ const testState = await vi.hoisted(async () => {
   let completeProjectFileRead: (value: null) => void = () => undefined;
   let projectFileRead = Promise.resolve<null>(null);
   let projectRemoved = false;
+  let connectedEnvironmentIds = ["environment-primary", "environment-ssh"];
   let targetSettings = {
-    defaultThreadEnvMode: "local" as "local" | "worktree",
+    defaultThreadEnvMode: "local" as "local" | "worktree" | null,
     newWorktreesStartFromOrigin: false,
     defaultModelSelection: null,
     defaultRuntimeMode: "full-access" as RuntimeMode,
@@ -49,6 +50,12 @@ const testState = await vi.hoisted(async () => {
     get projectRemoved() {
       return projectRemoved;
     },
+    get connectedEnvironmentIds() {
+      return connectedEnvironmentIds;
+    },
+    disconnect(environmentId: string) {
+      connectedEnvironmentIds = connectedEnvironmentIds.filter((id) => id !== environmentId);
+    },
     removeProject() {
       projectRemoved = true;
     },
@@ -58,12 +65,13 @@ const testState = await vi.hoisted(async () => {
     reset(
       nextStoredDraft: typeof storedDraft,
       workspaceDefaults = {
-        envMode: "local" as "local" | "worktree",
+        envMode: "local" as "local" | "worktree" | null,
         startFromOrigin: false,
       },
     ) {
       storedDraft = nextStoredDraft;
       projectRemoved = false;
+      connectedEnvironmentIds = ["environment-primary", "environment-ssh"];
       targetSettings = {
         defaultThreadEnvMode: workspaceDefaults.envMode,
         newWorktreesStartFromOrigin: workspaceDefaults.startFromOrigin,
@@ -98,7 +106,12 @@ const testServerConfigs = () =>
   ]);
 
 vi.mock("../rpc/atomRegistry", () => ({
-  appAtomRegistry: { get: () => testServerConfigs() },
+  appAtomRegistry: {
+    get: (atom: unknown) =>
+      atom === "connected-environment-ids"
+        ? testState.connectedEnvironmentIds
+        : testServerConfigs(),
+  },
 }));
 
 vi.mock("@effect/atom-react", () => ({
@@ -191,6 +204,9 @@ vi.mock("../state/entities", () => {
     useThread: () => null,
   };
 });
+vi.mock("../state/presentation", () => ({
+  environmentSummaries: { connectedEnvironmentIdsAtom: "connected-environment-ids" },
+}));
 vi.mock("../state/server", () => ({
   environmentServerConfigsAtom: {},
   primaryServerSettingsAtom: "primary-settings",
@@ -300,5 +316,20 @@ describe.each([
     await expect(pendingOpen).resolves.toBeNull();
     expect(testState.router.navigate).not.toHaveBeenCalled();
     expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
+  });
+});
+
+describe("useNewThreadHandler", () => {
+  it("opens the draft without waiting on a project file from an offline machine", async () => {
+    testState.reset(null, { envMode: null, startFromOrigin: false });
+    testState.disconnect("environment-ssh");
+
+    const opened = await useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+
+    expect(opened).toEqual({ draftId: "draft-delayed", threadId: "thread-delayed" });
+    expect(testState.router.navigate).toHaveBeenCalledOnce();
   });
 });

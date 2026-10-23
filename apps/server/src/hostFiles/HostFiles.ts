@@ -81,7 +81,7 @@ const FAILURE_MESSAGES: Record<HostFilesFailure, string> = {
   failed: "The filesystem operation failed.",
 };
 
-export const hostFilesError = (failure: HostFilesFailure, path?: string, detail?: string) =>
+const hostFilesError = (failure: HostFilesFailure, path?: string, detail?: string) =>
   new HostFilesError({
     failure,
     ...(path === undefined ? {} : { path }),
@@ -123,7 +123,7 @@ const statKind = (stats: {
   stats.isFile() ? "file" : stats.isDirectory() ? "directory" : "other";
 
 /** Describes a path without following it; symlinks report their target separately. */
-export const describeEntry = Effect.fn("HostFiles.describeEntry")(function* (path: string) {
+const describeEntry = Effect.fn("HostFiles.describeEntry")(function* (path: string) {
   const stats = yield* fsCall(path, () => NodeFSP.lstat(path));
   const base: {
     -readonly [K in keyof HostFileEntry]: HostFileEntry[K];
@@ -370,7 +370,7 @@ export const validateHostUploadToken = Effect.fn("HostFiles.validateUploadToken"
 });
 
 /** `name (1).ext`, `name (2).ext`, ... — the first free sibling. */
-export const keepBothPath = Effect.fn("HostFiles.keepBothPath")(function* (
+const keepBothPath = Effect.fn("HostFiles.keepBothPath")(function* (
   directory: string,
   name: string,
 ) {

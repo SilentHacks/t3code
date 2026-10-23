@@ -26,8 +26,8 @@ import {
   OMP_LIFECYCLE_BRIDGE_PROTOCOL_VERSION,
 } from "./OmpLifecycleBridgeExtension.ts";
 
-export const OMP_BRIDGE_SOCKET_ENV = "T3_OMP_BRIDGE_SOCKET";
-export const OMP_BRIDGE_TOKEN_ENV = "T3_OMP_BRIDGE_TOKEN";
+const OMP_BRIDGE_SOCKET_ENV = "T3_OMP_BRIDGE_SOCKET";
+const OMP_BRIDGE_TOKEN_ENV = "T3_OMP_BRIDGE_TOKEN";
 /** A missing or wedged extension must never stall a prompt. */
 const PROMPT_BOUNDARY_ACK_TIMEOUT_MS = 1_000;
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
