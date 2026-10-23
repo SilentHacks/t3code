@@ -355,10 +355,12 @@ export function usePendingThreadRequests(input: {
       );
       if ((useQuestionAttachmentPreparation.getState().counts[target] ?? 0) > 0) return;
       const draft = useComposerDraftStore.getState().getComposerDraft(target);
-      providerAnswers[question.id] = projectPendingUserInputAnswer(
-        answers[question.id],
-        draft?.threadContexts ?? [],
-      );
+      if (Object.hasOwn(answers, question.id)) {
+        providerAnswers[question.id] = projectPendingUserInputAnswer(
+          answers[question.id],
+          draft?.threadContexts ?? [],
+        );
+      }
       const attachments = draft ? [...draft.images, ...draft.files] : [];
       if (attachments.length === 0) continue;
       const uploaded = getUploadedAttachments({ environmentId, images: attachments });
