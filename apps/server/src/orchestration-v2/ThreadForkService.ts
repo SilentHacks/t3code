@@ -52,6 +52,7 @@ export interface ThreadForkServiceV2Shape {
   readonly plan: (input: {
     readonly sourceProjection: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly sourceRun: OrchestrationV2Run;
+    readonly sourceTurnItemOrdinal?: number;
     readonly sourceProviderThread: OrchestrationV2ProviderThread | undefined;
     readonly sourceTokenUsage?: OrchestrationV2ProviderTurnTokenUsage | undefined;
     readonly canonicalSourcePoint: OrchestrationV2ContextSourcePoint;
@@ -100,6 +101,9 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           type: "run",
           threadId: input.sourceProjection.thread.id,
           runId: input.sourceRun.id,
+          ...(input.sourceTurnItemOrdinal === undefined
+            ? {}
+            : { sourceTurnItemOrdinal: input.sourceTurnItemOrdinal }),
         },
         createdAt: input.createdAt,
         updatedAt: input.createdAt,

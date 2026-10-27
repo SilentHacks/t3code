@@ -35,6 +35,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { createAttachmentId } from "../attachmentStore.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
@@ -185,6 +186,144 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
 
   return threadId;
 });
+
+it.effect.each([
+  ["memory", ProjectionStore.layerMemory],
+  ["SQL", layerTest],
+] as const)(
+  "%s preserves thread HTML through rollback and an exact fork boundary, including retention and paginated history",
+  ([, layer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sourceId = yield* addRolledBackRecoveryCandidate("html-publication");
+      const source = yield* store.getThreadProjection(sourceId);
+      const now = source.updatedAt;
+      const run = source.runs[0]!;
+      yield* store.apply({
+        id: EventId.make("html:completed"),
+        type: "run.updated",
+        threadId: sourceId,
+        occurredAt: now,
+        payload: { ...run, status: "completed" },
+      });
+      const reference = {
+        attachmentId: createAttachmentId(sourceId, "html")!,
+        title: "Page",
+        height: 240,
+      };
+      const item: OrchestrationV2TurnItem = {
+        id: TurnItemId.make("html:first"),
+        threadId: sourceId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 2,
+        status: "completed",
+        title: "Page",
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        type: "dynamic_tool",
+        toolName: "t3-code.html_render",
+        input: { publication: { requestHash: "hash", anchorRunId: run.id } },
+        output: { htmlRender: reference },
+      };
+      yield* store.apply({
+        id: EventId.make("html:publication"),
+        type: "turn-item.updated",
+        threadId: sourceId,
+        occurredAt: now,
+        payload: item,
+      });
+      const forkId = ThreadId.make("thread:html-fork");
+      const fork = {
+        ...source.thread,
+        id: forkId,
+        forkedFrom: {
+          type: "run" as const,
+          threadId: sourceId,
+          runId: run.id,
+          sourceTurnItemOrdinal: 2,
+        },
+        lineage: {
+          parentThreadId: sourceId,
+          relationshipToParent: "fork" as const,
+          rootThreadId: sourceId,
+        },
+      };
+      yield* store.apply({
+        id: EventId.make("html:fork"),
+        type: "thread.created",
+        threadId: forkId,
+        occurredAt: now,
+        payload: fork,
+      });
+      yield* store.apply({
+        id: EventId.make("html:late"),
+        type: "turn-item.updated",
+        threadId: sourceId,
+        occurredAt: now,
+        payload: { ...item, id: TurnItemId.make("html:late"), ordinal: 3 },
+      });
+      const inherited = yield* store.getThreadProjection(forkId);
+      assert.deepEqual(
+        inherited.visibleTurnItems
+          .filter((row) => row.item.type === "dynamic_tool")
+          .map((row) => row.item.id),
+        [item.id],
+      );
+      assert.equal(
+        (yield* store.getThreadShell(forkId))?.visibleItemCount,
+        inherited.visibleTurnItems.length,
+      );
+      const window = yield* store.getThreadSnapshotWindow(forkId, { rowLimit: 10 });
+      assert.isTrue(window.projection.visibleTurnItems.some((row) => row.item.id === item.id));
+      const marker = inherited.visibleTurnItems.at(-1)!;
+      const cursor = encodeThreadHistoryCursor({
+        snapshotSequence: 0,
+        sourceThreadId: marker.sourceThreadId,
+        sourceItemId: marker.sourceItemId,
+        position: marker.position,
+      });
+      assert.isTrue(
+        (yield* store.getThreadHistoryPage(forkId, cursor)).items.some(
+          (row) => row.item.id === item.id,
+        ),
+      );
+      assert.include(yield* store.getThreadAttachmentIds(forkId), reference.attachmentId);
+      yield* store.apply({
+        id: EventId.make("html:rollback"),
+        type: "run.updated",
+        threadId: sourceId,
+        occurredAt: now,
+        payload: run,
+      });
+      assert.isTrue(
+        (yield* store.getThreadProjection(sourceId)).visibleTurnItems.some(
+          (row) => row.item.id === item.id,
+        ),
+      );
+      yield* store.apply({
+        id: EventId.make("html:source-deleted"),
+        type: "thread.deleted",
+        threadId: sourceId,
+        occurredAt: now,
+        payload: { ...source.thread, deletedAt: now },
+      });
+      assert.isTrue(yield* store.isHtmlRenderAttachmentReferenced(reference.attachmentId));
+      yield* store.apply({
+        id: EventId.make("html:fork-deleted"),
+        type: "thread.deleted",
+        threadId: forkId,
+        occurredAt: now,
+        payload: { ...fork, deletedAt: now },
+      });
+      assert.isFalse(yield* store.isHtmlRenderAttachmentReferenced(reference.attachmentId));
+    }).pipe(Effect.provide(layer)),
+);
 
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],

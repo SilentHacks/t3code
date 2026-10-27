@@ -4,6 +4,7 @@ import {
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
+  EventId,
   MessageId,
   GitCommandError,
   type ModelSelection,
@@ -36,7 +37,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
 import * as Stream from "effect/Stream";
 
-import { toolOutputImages } from "@t3tools/shared/toolOutput";
+import { htmlRenderFromToolItem, toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -326,6 +327,88 @@ it.effect("records accepted billed turn usage once without billing the context w
     });
   }).pipe(Effect.provide(layerTest.pipe(Layer.provide(layerAnalytics))));
 });
+
+it.effect(
+  "keeps one authoritative HTML frame and preserves direct and wrapped provider echoes for audit",
+  () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ids = yield* IdAllocator.IdAllocatorV2;
+      const now = yield* DateTime.now;
+      const threadEvent = yield* threadCreatedEvent(now);
+      const threadId = threadEvent.threadId;
+      const providerSessionId = yield* ids.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      const reference = { attachmentId: "canonical-html", title: "Page", height: 240 };
+      const canonical: OrchestrationV2TurnItem = {
+        type: "dynamic_tool",
+        id: TurnItemId.make("html:canonical"),
+        threadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: "Page",
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        toolName: "t3-code.html_render",
+        input: { publication: { requestHash: "hash", anchorRunId: null } },
+        output: { htmlRender: reference },
+      };
+      yield* sink.write({
+        events: [
+          threadEvent,
+          {
+            id: EventId.make("html:canonical"),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: canonical,
+          },
+        ],
+      });
+      for (const [index, toolName] of ["mcp__t3-code__html_render", "eval"].entries()) {
+        const turnItem = {
+          ...canonical,
+          id: TurnItemId.make(`html:echo:${index}`),
+          ordinal: index + 2,
+          toolName,
+          input: null,
+        };
+        yield* ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+          event: { type: "turn_item.updated", driver: CODEX_DRIVER, turnItem },
+        });
+      }
+      const projection = yield* store.getThreadProjection(threadId);
+      assert.equal(
+        projection.turnItems.filter(
+          (item) => item.type === "dynamic_tool" && htmlRenderFromToolItem(item) !== undefined,
+        ).length,
+        1,
+      );
+      const echo = projection.turnItems.find((item) => item.id === "html:echo:0");
+      assert.deepInclude(echo, {
+        output: {
+          publishedAttachmentId: reference.attachmentId,
+          providerOutput: { htmlRender: reference },
+        },
+      });
+      assert.isTrue(yield* store.hasHtmlRenderPublication(threadId, reference.attachmentId));
+      assert.isFalse(yield* store.hasHtmlRenderPublication(threadId, "unrelated-html"));
+    }).pipe(Effect.provide(layerTest)),
+);
 
 layer("ProviderEventIngestorV2", (it) => {
   it.effect("normalizes provider events through the real event log and projection store", () =>

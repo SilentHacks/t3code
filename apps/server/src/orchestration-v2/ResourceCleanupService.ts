@@ -11,6 +11,45 @@ import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+
+export const reconcileHtmlRenderPublications = Effect.fn(
+  "ResourceCleanupService.reconcileHtmlRenderPublications",
+)(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const config = yield* ServerConfig.ServerConfig;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const names = yield* fileSystem.readDirectory(config.attachmentsDir);
+  yield* Effect.forEach(
+    names.filter((name) => name.endsWith("-html.html.part")),
+    (name) => {
+      const attachmentId = name.slice(0, -".html.part".length);
+      const path = resolveAttachmentRelativePath({
+        attachmentsDir: config.attachmentsDir,
+        relativePath: `${attachmentId}.html`,
+      });
+      return path === null ? Effect.void : fileSystem.remove(`${path}.part`, { force: true });
+    },
+    { discard: true, concurrency: 4 },
+  );
+  yield* Effect.forEach(
+    names.filter((name) => name.endsWith("-html.html.pending")),
+    (name) =>
+      Effect.gen(function* () {
+        const attachmentId = name.slice(0, -".html.pending".length);
+        const path = resolveAttachmentRelativePath({
+          attachmentsDir: config.attachmentsDir,
+          relativePath: `${attachmentId}.html`,
+        });
+        if (path === null) return;
+        if (!(yield* projections.isHtmlRenderAttachmentReferenced(attachmentId))) {
+          yield* fileSystem.remove(path, { force: true });
+        }
+        yield* fileSystem.remove(`${path}.pending`, { force: true });
+      }),
+    { discard: true, concurrency: 4 },
+  );
+});
 
 export class ResourceCleanupError extends Schema.TaggedError<ResourceCleanupError>()(
   "ResourceCleanupError",
@@ -46,6 +85,16 @@ export const layer = Layer.effect(
     const fileSystem = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    // Startup runs before MCP accepts publications; unfinished final files can now be reconciled.
+    yield* reconcileHtmlRenderPublications().pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning(
+          "Could not reconcile unfinished HTML publications; retaining their files.",
+          { cause },
+        ),
+      ),
+    );
     return {
       cleanupScheduledTasks: Effect.fn("ResourceCleanupService.cleanupScheduledTasks")(function (
         threadId: ThreadId,
@@ -86,29 +135,42 @@ export const layer = Layer.effect(
       ) {
         return Effect.forEach(
           attachmentIds,
-          (attachmentId) => {
-            const extension = parseAttachmentFileExtension(attachmentId);
-            const path =
-              resolveAttachmentPathById({
-                attachmentsDir: config.attachmentsDir,
-                attachmentId,
-              }) ??
-              (extension
-                ? resolveAttachmentRelativePath({
-                    attachmentsDir: config.attachmentsDir,
-                    relativePath: `${attachmentId}.${extension}`,
-                  })
-                : null);
-            return path === null
-              ? Effect.void
-              : fileSystem.remove(path, { force: true }).pipe(
-                  Effect.andThen(fileSystem.remove(`${path}.txt`, { force: true })),
-                  Effect.mapError(
-                    (cause) =>
-                      new ResourceCleanupError({ operation: "attachment", attachmentId, cause }),
-                  ),
-                );
-          },
+          (attachmentId) =>
+            Effect.gen(function* () {
+              const extension = parseAttachmentFileExtension(attachmentId);
+              if (
+                extension === "html" &&
+                (yield* projections
+                  .isHtmlRenderAttachmentReferenced(attachmentId)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ResourceCleanupError({ operation: "attachment", attachmentId, cause }),
+                    ),
+                  ))
+              )
+                return;
+              const path =
+                resolveAttachmentPathById({
+                  attachmentsDir: config.attachmentsDir,
+                  attachmentId,
+                }) ??
+                (extension
+                  ? resolveAttachmentRelativePath({
+                      attachmentsDir: config.attachmentsDir,
+                      relativePath: `${attachmentId}.${extension}`,
+                    })
+                  : null);
+              if (path === null) return;
+              yield* fileSystem.remove(path, { force: true }).pipe(
+                Effect.andThen(fileSystem.remove(`${path}.txt`, { force: true })),
+                Effect.andThen(fileSystem.remove(`${path}.pending`, { force: true })),
+                Effect.mapError(
+                  (cause) =>
+                    new ResourceCleanupError({ operation: "attachment", attachmentId, cause }),
+                ),
+              );
+            }),
           { discard: true, concurrency: 4 },
         );
       }),

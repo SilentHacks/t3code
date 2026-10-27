@@ -74,6 +74,12 @@ const HtmlRenderTool = Tool.make(HTML_RENDER_TOOL_NAME, {
   description: `Show a finished HTML page (chart, diagram, mockup) inline in this thread, above your final reply. Do not announce or restate the page. Frame fits height to ${HTML_RENDER_MAX_FIT_HEIGHT}px. On mobile, content past the given height scrolls. ${HTML_RENDER_LAYOUT_GUIDE} ${HTML_RENDER_THEME_GUIDE}`,
   parameters: Schema.Struct({
     html: Html,
+    publicationKey: Schema.optional(
+      Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)).annotate({
+        description:
+          "Optional stable invocation key. Reusing it with the same page returns the original publication; changing the page under that key is an error.",
+      }),
+    ),
     title: Schema.String.check(
       Schema.isMinLength(1),
       Schema.isMaxLength(HTML_RENDER_MAX_TITLE_LENGTH),

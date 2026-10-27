@@ -108,6 +108,15 @@ export type HtmlRenderPrepareError =
   | HtmlRenderPageTooLargeError
   | HtmlRenderViewportHeightError;
 
+const isPrepareError = Schema.is(
+  Schema.Union([
+    HtmlRenderImagesNotFoundError,
+    HtmlRenderImageTooLargeError,
+    HtmlRenderPageTooLargeError,
+    HtmlRenderViewportHeightError,
+  ]),
+);
+
 export interface HtmlPreview {
   readonly png: string;
   readonly width: number;
@@ -127,6 +136,14 @@ export class HtmlRender extends Context.Service<
       readonly title: string;
       readonly height: number;
     }) => Effect.Effect<HtmlRenderReference, HtmlRenderPrepareError | HtmlRenderStoreError>;
+    readonly preparePublication: (input: {
+      readonly threadId: ThreadId;
+      readonly html: string;
+      readonly title: string;
+      readonly height: number;
+    }) => Effect.Effect<HtmlRenderReference, HtmlRenderPrepareError | HtmlRenderStoreError>;
+    readonly discardPublication: (reference: HtmlRenderReference) => Effect.Effect<void>;
+    readonly confirmPublication: (reference: HtmlRenderReference) => Effect.Effect<void>;
     readonly preview: (input: {
       readonly html: string;
       readonly width?: number | undefined;
@@ -459,6 +476,73 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const preparePublication = Effect.fn("HtmlRender.preparePublication")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly html: string;
+    readonly title: string;
+    readonly height: number;
+  }) {
+    const html = yield* prepare(input.html);
+    const attachmentId = createAttachmentId(input.threadId, "html");
+    const filePath =
+      attachmentId === null
+        ? null
+        : resolveAttachmentRelativePath({
+            attachmentsDir: config.attachmentsDir,
+            relativePath: `${attachmentId}.html`,
+          });
+    if (filePath === null || attachmentId === null) {
+      return yield* new HtmlRenderStoreError({ cause: new Error("Invalid thread id.") });
+    }
+    const partialPath = `${filePath}.part`;
+    return yield* fileSystem.writeFileString(partialPath, html).pipe(
+      Effect.andThen(measure(html)),
+      Effect.andThen((heights) =>
+        fileSystem
+          .writeFileString(`${filePath}.pending`, "")
+          .pipe(
+            Effect.andThen(fileSystem.rename(partialPath, filePath)),
+            Effect.as(heights),
+            Effect.uninterruptible,
+          ),
+      ),
+      Effect.map((heights): HtmlRenderReference => ({
+        attachmentId,
+        title: input.title.trim().slice(0, HTML_RENDER_MAX_TITLE_LENGTH) || "HTML",
+        height: clampHtmlRenderHeight(input.height),
+        ...(heights === undefined ? {} : { heights }),
+      })),
+      Effect.mapError((cause) =>
+        isPrepareError(cause) ? cause : new HtmlRenderStoreError({ cause }),
+      ),
+      Effect.onError(() => fileSystem.remove(partialPath, { force: true }).pipe(Effect.ignore)),
+    );
+  });
+
+  const discardPublication = Effect.fn("HtmlRender.discardPublication")(function* (
+    reference: HtmlRenderReference,
+  ) {
+    const filePath = resolveAttachmentRelativePath({
+      attachmentsDir: config.attachmentsDir,
+      relativePath: `${reference.attachmentId}.html`,
+    });
+    if (filePath !== null) {
+      yield* fileSystem.remove(filePath, { force: true }).pipe(Effect.ignore);
+      yield* fileSystem.remove(`${filePath}.pending`, { force: true }).pipe(Effect.ignore);
+    }
+  });
+
+  const confirmPublication = Effect.fn("HtmlRender.confirmPublication")(function* (
+    reference: HtmlRenderReference,
+  ) {
+    const filePath = resolveAttachmentRelativePath({
+      attachmentsDir: config.attachmentsDir,
+      relativePath: `${reference.attachmentId}.html`,
+    });
+    if (filePath !== null)
+      yield* fileSystem.remove(`${filePath}.pending`, { force: true }).pipe(Effect.ignore);
+  });
+
   const preview = Effect.fn("HtmlRender.preview")(function* (input: {
     readonly html: string;
     readonly width?: number | undefined;
@@ -494,7 +578,14 @@ const make = Effect.gen(function* () {
     } satisfies HtmlPreview;
   });
 
-  return HtmlRender.of({ prepare, publish, preview });
+  return HtmlRender.of({
+    prepare,
+    publish,
+    preparePublication,
+    discardPublication,
+    confirmPublication,
+    preview,
+  });
 });
 
 export const layer = Layer.effect(HtmlRender, make);

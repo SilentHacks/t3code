@@ -1253,6 +1253,34 @@ describe("HTML renders in the timeline", () => {
     ]);
   });
 
+  it("shows server publications without a provider run and keeps echoed references audit-only", () => {
+    const publication: OrchestrationV2TurnItem = {
+      ...base("publication", 2),
+      type: "dynamic_tool",
+      runId: null,
+      toolName: "t3-code.html_render",
+      input: { publication: { requestHash: "hash", anchorRunId: runId } },
+      output: { htmlRender },
+    };
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        visible(publication),
+        visible(
+          renderCall("completed", {
+            publishedAttachmentId: htmlRender.attachmentId,
+            providerOutput: { htmlRender },
+          }),
+        ),
+      ],
+      optimisticMessages: [],
+    });
+    expect(entries.filter((entry) => entry.kind === "html-render")).toMatchObject([
+      { id: "publication", runId: null, htmlRender },
+    ]);
+    expect(rowsFor(entries, false).filter((kind) => kind === "html-render")).toHaveLength(1);
+    expect(rowsFor(entries, true).filter((kind) => kind === "html-render")).toHaveLength(1);
+  });
+
   it("hosts a captured MCP app in place, from any provider's tool", () => {
     const mcpApp = {
       attachmentId: "render-thread-app-html",

@@ -16,17 +16,24 @@ import {
   ThreadId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2GetTurnItemResult,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { McpAttachmentInput } from "./attachment/input.ts";
 import { McpSchema, McpServer } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
+import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
+import * as ResourceCleanupService from "../../orchestration-v2/ResourceCleanupService.ts";
+import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 
 import {
   OrchestratorCommandRejectedError,
@@ -242,8 +249,12 @@ it("bounds public command rejections and redacts internal dispatch causes", () =
   });
 });
 
-it.effect("returns an HTML render reference that Codex and Claude tool rows both carry", () =>
-  Effect.gen(function* () {
+it.effect("publishes HTML independently of the provider's tool echo", () => {
+  const publications: Array<
+    Extract<OrchestrationV2ServerCommand, { type: "html-render.publish" }>
+  > = [];
+  let pause: { phase: "before" | "after"; entered: Deferred.Deferred<void> } | undefined;
+  return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const result = yield* server
       .callTool({
@@ -262,17 +273,121 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
     expect(
       htmlRenderFromToolItem({ toolName: "mcp__t3-code__html_render", output: result.content }),
     ).toEqual(reference);
+    expect(publications).toHaveLength(1);
+    expect(publications[0]).toMatchObject({
+      type: "html-render.publish",
+      threadId,
+      reference,
+    });
+    const call = (html: string, publicationKey?: string) =>
+      server
+        .callTool({
+          name: "html_render",
+          arguments: {
+            html,
+            title: "Revenue",
+            height: 240,
+            ...(publicationKey === undefined ? {} : { publicationKey }),
+          },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const first = yield* call("<p>Keyed</p>", "revenue");
+    expect((yield* call("<p>Keyed</p>", "revenue")).structuredContent).toEqual(
+      first.structuredContent,
+    );
+    expect((yield* call("<p>Changed</p>", "revenue")).isError).toBe(true);
+    expect(publications).toHaveLength(2);
+    const concurrent = yield* Effect.all(
+      [call("<p>Concurrent</p>", "concurrent"), call("<p>Concurrent</p>", "concurrent")],
+      { concurrency: "unbounded" },
+    );
+    expect(concurrent[0]?.structuredContent).toEqual(concurrent[1]?.structuredContent);
+    expect(publications).toHaveLength(3);
+    yield* call("<p>Keyed</p>");
+    yield* call("<p>Keyed</p>");
+    expect(publications).toHaveLength(5);
+    const files = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    for (const phase of ["before", "after"] as const) {
+      pause = { phase, entered: yield* Deferred.make<void>() };
+      const fiber = yield* Effect.forkChild(call("<p>Cancelled</p>", `cancelled-${phase}`));
+      yield* Deferred.await(pause.entered);
+      yield* Fiber.interrupt(fiber);
+      expect(publications).toHaveLength(phase === "before" ? 5 : 6);
+      pause = undefined;
+    }
+    const saved = publications.at(-1)!.reference;
+    const savedPath = resolveAttachmentPathById({
+      attachmentsDir: config.attachmentsDir,
+      attachmentId: saved.attachmentId,
+    });
+    expect(savedPath).not.toBeNull();
+    expect(yield* files.exists(`${savedPath}.pending`)).toBe(true);
+    expect((yield* call("<p>Cancelled</p>", "cancelled-after")).structuredContent).toMatchObject({
+      htmlRender: saved,
+    });
+    yield* ResourceCleanupService.reconcileHtmlRenderPublications().pipe(
+      Effect.provide(
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          isHtmlRenderAttachmentReferenced: (id) =>
+            Effect.succeed(
+              publications.some((publication) => publication.reference.attachmentId === id),
+            ),
+        }),
+      ),
+    );
+    expect(yield* files.exists(savedPath!)).toBe(true);
+    expect(
+      (yield* files.readDirectory(config.attachmentsDir)).filter((name) => name.endsWith(".html")),
+    ).toHaveLength(publications.length);
   }).pipe(
     Effect.provide(
       McpHttpServer.layerHtmlToolkit.pipe(
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(McpProviderSessions.layer),
         Layer.provide(PreviewBrowser.layer),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" }),
+        ),
         Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
         Layer.provide(FetchHttpClient.layer),
         Layer.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
+            dispatch: (command) =>
+              Effect.gen(function* () {
+                if (pause?.phase === "before") {
+                  yield* Deferred.succeed(pause.entered, undefined);
+                  return yield* Effect.never;
+                }
+                if (
+                  command.type === "html-render.publish" &&
+                  !publications.some((prior) => prior.commandId === command.commandId)
+                )
+                  publications.push(command);
+                if (pause?.phase === "after") {
+                  yield* Deferred.succeed(pause.entered, undefined);
+                  return yield* Effect.never;
+                }
+                return { sequence: 1, storedEvents: [] };
+              }),
+            getTurnItem: ({ itemId }) =>
+              Effect.succeed({
+                item:
+                  publications.flatMap((command) =>
+                    command.itemId === itemId
+                      ? [
+                          {
+                            type: "dynamic_tool",
+                            input: { publication: { requestHash: command.requestHash } },
+                            output: { htmlRender: command.reference },
+                          },
+                        ]
+                      : [],
+                  )[0] ?? null,
+              }) as Effect.Effect<OrchestrationV2GetTurnItemResult>,
             getThreadShell: () =>
               Effect.succeed({
                 id: threadId,
@@ -283,10 +398,11 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
               } as OrchestrationV2ThreadShell),
           }),
         ),
+        Layer.provideMerge(NodeServices.layer),
       ),
     ),
-  ),
-);
+  );
+});
 
 it.effect("records only failed calls of tools that hand off no work", () => {
   // Recording runs detached from the tool response, so the first event is awaited.

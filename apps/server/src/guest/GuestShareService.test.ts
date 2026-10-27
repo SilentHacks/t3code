@@ -407,6 +407,98 @@ it.effect("serves no render for an item outside the shared thread", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect(
+  "serves inherited HTML through a fork's visible history without authorizing other attachment IDs",
+  () =>
+    Effect.gen(function* () {
+      const { guestShares } = yield* shareThread;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const files = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      const runId = yield* ownerRun;
+      const source = yield* store.getThreadProjection(threadId);
+      const now = yield* DateTime.now;
+      const run = source.runs.find((run) => run.id === runId)!;
+      const attachmentId = createAttachmentId(threadId, "html")!;
+      const path = resolveAttachmentPath({
+        attachmentsDir: config.attachmentsDir,
+        attachment: {
+          id: ChatAttachmentId.make(attachmentId),
+          type: "file",
+          name: "page.html",
+          mimeType: "text/html",
+          sizeBytes: 4,
+        },
+      });
+      assert.isNotNull(path);
+      yield* files.writeFileString(path!, "<p>Shared</p>");
+      const item: OrchestrationV2TurnItem = {
+        type: "dynamic_tool",
+        id: TurnItemId.make("html:shared"),
+        threadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 2,
+        status: "completed",
+        title: "Shared",
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        toolName: "t3-code.html_render",
+        input: { publication: { requestHash: "hash", anchorRunId: runId } },
+        output: { htmlRender: { attachmentId, title: "Shared", height: 240 } },
+      };
+      const forkId = ThreadId.make("thread:guest-html-fork");
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("html:guest-run"),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...run, status: "completed" },
+          },
+          {
+            id: EventId.make("html:guest-page"),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: item,
+          },
+          {
+            id: EventId.make("html:guest-fork"),
+            type: "thread.created",
+            threadId: forkId,
+            occurredAt: now,
+            payload: {
+              ...source.thread,
+              id: forkId,
+              guestShare: null,
+              forkedFrom: { type: "run", threadId, runId, sourceTurnItemOrdinal: 2 },
+              lineage: {
+                parentThreadId: threadId,
+                relationshipToParent: "fork",
+                rootThreadId: threadId,
+              },
+            },
+          },
+        ],
+      });
+      const { url } = yield* guestShares.create({ threadId: forkId });
+      const { token } = yield* guestShares.redeem({
+        credential: url.slice(url.indexOf("#") + 1),
+        name: "Reader",
+      });
+      assert.deepEqual(yield* guestShares.render(token, item.id), { path, title: "Shared" });
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.render(token, attachmentId))));
+    }).pipe(Effect.provide(layerTest)),
+);
+
 /** A message from the owner, which opens a run for the command below. */
 const ownerRun = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;

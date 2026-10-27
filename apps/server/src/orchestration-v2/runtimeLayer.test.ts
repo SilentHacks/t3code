@@ -32,6 +32,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -290,6 +291,139 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerPlatformTest),
 );
 
+it.effect(
+  "commits one server HTML publication under concurrent receipt replay and rejects stale or deleted owners",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:html-publication");
+      const providerThreadId = ProviderThreadId.make("provider-thread:html-publication");
+      const providerSessionId = ProviderSessionId.make("session:html-publication");
+      const created = yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create:html-publication"),
+        threadId,
+        projectId: ProjectId.make("project:html-publication"),
+        title: "HTML",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const thread = yield* projections.getThread(threadId);
+      const attached = yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:html-publication:owner"),
+            type: "thread.metadata-updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...thread, activeProviderThreadId: providerThreadId },
+          },
+          {
+            id: EventId.make("event:html-publication:provider"),
+            type: "provider-thread.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: providerThreadId,
+              driver,
+              providerInstanceId: modelSelection.instanceId,
+              providerSessionId,
+              appThreadId: threadId,
+              ownerNodeId: null,
+              nativeThreadRef: null,
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: null,
+              lastRunOrdinal: null,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      const command = {
+        type: "html-render.publish" as const,
+        commandId: CommandId.make("publish:html-publication"),
+        threadId,
+        providerInstanceId: modelSelection.instanceId,
+        providerSessionId,
+        itemId: TurnItemId.make("item:html-publication"),
+        requestHash: "hash",
+        reference: { attachmentId: "page-html", title: "Page", height: 240 },
+      };
+      const receipts = yield* Effect.all(
+        [orchestrator.dispatch(command), orchestrator.dispatch(command)],
+        { concurrency: "unbounded" },
+      );
+      assert.equal(receipts.filter((receipt) => receipt.replayed).length, 1);
+      const projection = yield* projections.getThreadProjection(threadId);
+      const item = projection.turnItems.find((item) => item.id === command.itemId);
+      assert.equal(projection.turnItems.filter((item) => item.id === command.itemId).length, 1);
+      assert.deepInclude(item, {
+        type: "dynamic_tool",
+        toolName: "t3-code.html_render",
+        status: "completed",
+        runId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+      });
+      const replayed = yield* Effect.gen(function* () {
+        const fresh = yield* ProjectionStore.ProjectionStoreV2;
+        for (const stored of [...created.storedEvents, ...attached, ...receipts[0]!.storedEvents]) {
+          yield* fresh.apply(stored.event);
+        }
+        return yield* fresh.getThreadProjection(threadId);
+      }).pipe(Effect.provide(ProjectionStore.layerMemory));
+      assert.deepEqual(
+        replayed.visibleTurnItems.find((row) => row.item.id === command.itemId)?.item,
+        item,
+      );
+      assert.deepEqual(
+        (yield* orchestrator.getThreadSnapshotWindow(threadId, {
+          rowLimit: 10,
+        })).projection.visibleTurnItems.find((row) => row.item.id === command.itemId)?.item,
+        item,
+      );
+      assert.isTrue(
+        Exit.isFailure(
+          yield* Effect.exit(
+            orchestrator.dispatch({
+              ...command,
+              commandId: CommandId.make("publish:stale-owner"),
+              providerSessionId: "stale",
+            }),
+          ),
+        ),
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("delete:html-publication"),
+        threadId,
+      });
+      assert.isTrue(
+        Exit.isFailure(
+          yield* Effect.exit(
+            orchestrator.dispatch({
+              ...command,
+              commandId: CommandId.make("publish:deleted-owner"),
+            }),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
 const layerLegacyImportTest = RuntimeLayer.layer.pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(McpProviderSessions.layer),
@@ -319,6 +453,7 @@ const layerScheduledTasksTest = ScheduledTaskService.layer.pipe(
 );
 const layerResourceCleanupTest = ResourceCleanupService.layer.pipe(
   Layer.provideMerge(layerScheduledTasksTest),
+  Layer.provide(ProjectionStore.layer),
   Layer.provide(
     Layer.mergeAll(
       Layer.mock(PreviewManager.PreviewManager)({ close: () => Effect.void }),

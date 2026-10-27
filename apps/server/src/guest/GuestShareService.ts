@@ -574,10 +574,15 @@ const make = Effect.gen(function* () {
   });
 
   const render = Effect.fn("GuestShareService.render")(function* (session: string, itemId: string) {
-    const { thread, item } = yield* threadItem(session, itemId);
-    if (item.type !== "dynamic_tool") return yield* unavailable;
+    const { thread } = yield* authorize(session, "session");
+    const projection = yield* orchestrator
+      .getThreadProjection(thread.id)
+      .pipe(Effect.mapError(() => unavailable));
+    const row = projection.visibleTurnItems.find((candidate) => candidate.item.id === itemId);
+    if (row === undefined || row.item.type !== "dynamic_tool") return yield* unavailable;
+    const item = row.item;
     const reference = htmlRenderFromToolItem(item);
-    const [attachmentId] = threadHtmlRenderAttachmentIds(thread.id, [item]);
+    const [attachmentId] = threadHtmlRenderAttachmentIds(row.sourceThreadId, [item]);
     const path =
       attachmentId === undefined
         ? null

@@ -18,10 +18,13 @@ import * as NodeHttp from "node:http";
 import * as NodeURL from "node:url";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import * as HtmlRender from "./HtmlRender.ts";
 import { HtmlRenderBrowserError } from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
+import * as ResourceCleanupService from "../orchestration-v2/ResourceCleanupService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 
 const TEST_BROWSER_ENV = "T3CODE_TEST_HEADLESS_SHELL";
 
@@ -53,6 +56,85 @@ const layerTest = layerHtmlRender();
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 describe("HtmlRender", () => {
+  it.effect("removes partial files when preparation is cancelled before finalization", () =>
+    Effect.gen(function* () {
+      const measuring = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const renders = yield* HtmlRender.HtmlRender;
+        const files = yield* FileSystem.FileSystem;
+        const config = yield* ServerConfig.ServerConfig;
+        const fiber = yield* Effect.forkChild(
+          renders.preparePublication({
+            threadId: ThreadId.make("cancelled-html"),
+            html: "<p>Cancelled</p>",
+            title: "Page",
+            height: 240,
+          }),
+        );
+        yield* Deferred.await(measuring);
+        expect(
+          (yield* files.readDirectory(config.attachmentsDir)).some((name) =>
+            name.endsWith(".part"),
+          ),
+        ).toBe(true);
+        yield* Fiber.interrupt(fiber);
+        expect(yield* files.readDirectory(config.attachmentsDir)).toEqual([]);
+      }).pipe(
+        Effect.provide(
+          layerHtmlRender(
+            undefined,
+            Deferred.succeed(measuring, undefined).pipe(Effect.andThen(Effect.never)),
+          ),
+        ),
+      );
+    }),
+  );
+  it.effect(
+    "finalizes immutable files and reconciles committed and orphaned publications after restart",
+    () =>
+      Effect.gen(function* () {
+        const renders = yield* HtmlRender.HtmlRender;
+        const files = yield* FileSystem.FileSystem;
+        const config = yield* ServerConfig.ServerConfig;
+        const committed = new Set<string>();
+        const prepare = () =>
+          renders.preparePublication({
+            threadId: ThreadId.make("html-publication"),
+            html: "<p>Durable page</p>",
+            title: "Page",
+            height: 240,
+          });
+        const saved = yield* prepare();
+        const orphan = yield* prepare();
+        const confirmed = yield* prepare();
+        const discarded = yield* prepare();
+        const path = (id: string) =>
+          resolveAttachmentRelativePath({
+            attachmentsDir: config.attachmentsDir,
+            relativePath: `${id}.html`,
+          })!;
+        expect(yield* files.exists(`${path(saved.attachmentId)}.pending`)).toBe(true);
+        expect(yield* files.exists(`${path(saved.attachmentId)}.part`)).toBe(false);
+        expect(yield* files.readFileString(path(saved.attachmentId))).toContain("Durable page");
+        yield* files.writeFileString(`${path(orphan.attachmentId)}.part`, "unfinished");
+        committed.add(saved.attachmentId);
+        yield* renders.confirmPublication(confirmed);
+        yield* renders.discardPublication(discarded);
+        yield* ResourceCleanupService.reconcileHtmlRenderPublications().pipe(
+          Effect.provide(
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              isHtmlRenderAttachmentReferenced: (id) => Effect.succeed(committed.has(id)),
+            }),
+          ),
+        );
+        expect(yield* files.exists(path(saved.attachmentId))).toBe(true);
+        expect(yield* files.exists(`${path(saved.attachmentId)}.pending`)).toBe(false);
+        expect(yield* files.exists(path(orphan.attachmentId))).toBe(false);
+        expect(yield* files.exists(`${path(orphan.attachmentId)}.part`)).toBe(false);
+        expect(yield* files.exists(path(confirmed.attachmentId))).toBe(true);
+        expect(yield* files.exists(path(discarded.attachmentId))).toBe(false);
+      }).pipe(Effect.provide(layerTest)),
+  );
   it.effect("inlines local images by absolute path and leaves URLs and relative paths alone", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

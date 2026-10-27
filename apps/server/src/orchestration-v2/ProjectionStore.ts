@@ -88,6 +88,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -460,6 +461,13 @@ export interface ProjectionStoreV2Shape {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
   }) => Effect.Effect<OrchestrationV2TurnItem | null, ProjectionStoreV2Error>;
+  readonly hasHtmlRenderPublication: (
+    threadId: ThreadId,
+    attachmentId: string,
+  ) => Effect.Effect<boolean, ProjectionStoreV2Error>;
+  readonly isHtmlRenderAttachmentReferenced: (
+    attachmentId: string,
+  ) => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly getThreadRecords: <K extends ProjectionRecordField>(
     threadId: ThreadId,
     fields: ReadonlyArray<K>,
@@ -1155,9 +1163,12 @@ type SettlementThreadRow = Pick<
 
 type ShellRunItemCountRow = {
   readonly thread_id: string;
-  readonly run_id: string;
+  readonly run_id: string | null;
   readonly item_count: number;
+  readonly publication_ordinal: number | null;
 };
+
+type HtmlPublicationAnchor = { readonly ordinal: number; readonly anchorRunId: RunId | null };
 
 type ShellItemCountRow = {
   readonly thread_id: string;
@@ -1435,22 +1446,45 @@ function makeForkMarkerTurnItem(input: {
   };
 }
 
+const decodeHtmlPublication = Schema.decodeUnknownOption(
+  Schema.Struct({ publication: Schema.Struct({ anchorRunId: Schema.NullOr(RunId) }) }),
+);
+
 function isTurnItemAtOrBeforeRun(input: {
   readonly historyOrigin: OrchestrationV2ThreadProjection["thread"]["historyOrigin"];
-  readonly itemRunId: OrchestrationV2TurnItem["runId"];
+  readonly item: Pick<OrchestrationV2TurnItem, "runId" | "type" | "ordinal"> & {
+    readonly toolName?: string | null;
+    readonly input?: unknown;
+  };
   readonly runOrdinalById: ReadonlyMap<NonNullable<OrchestrationV2TurnItem["runId"]>, number>;
   readonly sourceRunOrdinal: number;
+  readonly sourceTurnItemOrdinal?: number;
 }): boolean {
-  if (input.itemRunId === null) {
-    return input.historyOrigin === "v1_import";
+  if (input.item.runId === null) {
+    if (input.historyOrigin === "v1_import") return true;
+    const item = input.item;
+    if (
+      item.type !== "dynamic_tool" ||
+      item.toolName !== "t3-code.html_render" ||
+      input.sourceTurnItemOrdinal === undefined ||
+      item.ordinal > input.sourceTurnItemOrdinal
+    )
+      return false;
+    const publication = decodeHtmlPublication(item.input);
+    if (Option.isNone(publication)) return false;
+    const anchor = publication.value.publication.anchorRunId;
+    return (
+      anchor === null || (input.runOrdinalById.get(anchor) ?? Infinity) <= input.sourceRunOrdinal
+    );
   }
-  const ordinal = input.runOrdinalById.get(input.itemRunId);
+  const ordinal = input.runOrdinalById.get(input.item.runId);
   return ordinal !== undefined && ordinal <= input.sourceRunOrdinal;
 }
 
 function visibleTurnItemsThroughRun(input: {
   readonly sourceProjection: OrchestrationV2ThreadProjection;
   readonly sourceRunId: NonNullable<OrchestrationV2TurnItem["runId"]>;
+  readonly sourceTurnItemOrdinal?: number;
 }): Array<Omit<OrchestrationV2ProjectedTurnItem, "position">> {
   const sourceRun = input.sourceProjection.runs.find((run) => run.id === input.sourceRunId);
   if (sourceRun === undefined) {
@@ -1481,9 +1515,12 @@ function visibleTurnItemsThroughRun(input: {
       }
       return isTurnItemAtOrBeforeRun({
         historyOrigin: input.sourceProjection.thread.historyOrigin,
-        itemRunId: item.runId,
+        item,
         runOrdinalById,
         sourceRunOrdinal: sourceRun.ordinal,
+        ...(input.sourceTurnItemOrdinal === undefined
+          ? {}
+          : { sourceTurnItemOrdinal: input.sourceTurnItemOrdinal }),
       });
     }),
   );
@@ -1510,6 +1547,9 @@ function buildVisibleTurnItems(input: {
       : visibleTurnItemsThroughRun({
           sourceProjection: input.sourceProjection,
           sourceRunId: forkedFrom.runId,
+          ...(forkedFrom.sourceTurnItemOrdinal === undefined
+            ? {}
+            : { sourceTurnItemOrdinal: forkedFrom.sourceTurnItemOrdinal }),
         });
   const markerItem = makeForkMarkerTurnItem({
     targetProjection: input.projection,
@@ -1800,6 +1840,7 @@ type ShellThreadState = {
   readonly goal: OrchestrationV2ThreadShell["goal"];
   readonly itemCount: number;
   readonly runlessItemCount: number;
+  readonly htmlPublications: ReadonlyArray<HtmlPublicationAnchor>;
   readonly updatedAt: OrchestrationV2ThreadProjection["updatedAt"];
   readonly runOrdinalById: ReadonlyMap<RunId, number>;
   readonly itemCountByRunId: ReadonlyMap<RunId, number>;
@@ -1828,6 +1869,7 @@ function shellStatusFromStoredRunStatus(status: string | null): OrchestrationV2S
 function itemCountThroughRun(input: {
   readonly state: ShellThreadState;
   readonly runId: RunId;
+  readonly sourceTurnItemOrdinal?: number;
 }): number {
   const runOrdinal = input.state.runOrdinalById.get(input.runId);
   if (runOrdinal === undefined) {
@@ -1835,6 +1877,17 @@ function itemCountThroughRun(input: {
   }
 
   let count = input.state.thread.historyOrigin === "v1_import" ? input.state.runlessItemCount : 0;
+  if (
+    input.state.thread.historyOrigin !== "v1_import" &&
+    input.sourceTurnItemOrdinal !== undefined
+  ) {
+    count += input.state.htmlPublications.filter(
+      (publication) =>
+        publication.ordinal <= input.sourceTurnItemOrdinal! &&
+        (publication.anchorRunId === null ||
+          (input.state.runOrdinalById.get(publication.anchorRunId) ?? Infinity) <= runOrdinal),
+    ).length;
+  }
   for (const [runId, itemCount] of input.state.itemCountByRunId) {
     const itemRunOrdinal = input.state.runOrdinalById.get(runId);
     if (itemRunOrdinal !== undefined && itemRunOrdinal <= runOrdinal) {
@@ -1895,7 +1948,13 @@ function visibleItemCountForShell(input: {
 
   return (
     inheritedPrefixCount +
-    itemCountThroughRun({ state: sourceState, runId: forkedFrom.runId }) +
+    itemCountThroughRun({
+      state: sourceState,
+      runId: forkedFrom.runId,
+      ...(forkedFrom.sourceTurnItemOrdinal === undefined
+        ? {}
+        : { sourceTurnItemOrdinal: forkedFrom.sourceTurnItemOrdinal }),
+    }) +
     1 +
     state.itemCount
   );
@@ -2897,6 +2956,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly userTurnLimit?: number | undefined;
         readonly anchorItemId?: TurnItemId | undefined;
         readonly requiredRunId?: RunId | undefined;
+        readonly sourceTurnItemOrdinal?: number | undefined;
       },
     ) => sql`
                 WITH eligible AS NOT MATERIALIZED (
@@ -2936,6 +2996,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                           FROM orchestration_v2_projection_threads AS source_thread
                           WHERE source_thread.thread_id = item.thread_id
                             AND json_extract(source_thread.payload_json, '$.historyOrigin') = 'v1_import'
+                        )
+                      )
+                      OR (
+                        item.run_id IS NULL AND item.type = 'dynamic_tool'
+                        AND item.ordinal <= ${window.sourceTurnItemOrdinal ?? -1}
+                        AND json_extract(item.payload_json, '$.toolName') = 't3-code.html_render'
+                        AND json_extract(item.payload_json, '$.input.publication.requestHash') IS NOT NULL
+                        AND (
+                          json_extract(item.payload_json, '$.input.publication.anchorRunId') IS NULL
+                          OR EXISTS (
+                            SELECT 1 FROM orchestration_v2_projection_runs anchor_run
+                            JOIN orchestration_v2_projection_runs required_run
+                              ON required_run.run_id = ${window.requiredRunId ?? null}
+                            WHERE anchor_run.run_id = json_extract(item.payload_json, '$.input.publication.anchorRunId')
+                              AND anchor_run.ordinal <= required_run.ordinal
+                          )
                         )
                       )
                       OR run.ordinal <= (
@@ -3086,6 +3162,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly userTurnLimit?: number | undefined;
           readonly anchorItemId?: TurnItemId | undefined;
           readonly requiredRunId?: RunId | undefined;
+          readonly sourceTurnItemOrdinal?: number | undefined;
           readonly suppressLocal?: boolean | undefined;
         },
         fields?: ReadonlyArray<ProjectionRecordField>,
@@ -3655,6 +3732,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly userTurnLimit?: number | undefined;
         readonly anchorItemId?: TurnItemId | undefined;
         readonly requiredRunId?: RunId | undefined;
+        readonly sourceTurnItemOrdinal?: number | undefined;
         readonly suppressLocal?: boolean | undefined;
         readonly historyAnchor?:
           | { readonly threadId: ThreadId; readonly itemId: TurnItemId }
@@ -3671,6 +3749,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly userTurnLimit?: number | undefined;
           readonly anchorItemId?: TurnItemId | undefined;
           readonly requiredRunId?: RunId | undefined;
+          readonly sourceTurnItemOrdinal?: number | undefined;
           readonly suppressLocal?: boolean | undefined;
           readonly historyAnchor?:
             | { readonly threadId: ThreadId; readonly itemId: TurnItemId }
@@ -3739,6 +3818,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     LIMIT 1
                   ), effective_boundary AS (
                     SELECT COALESCE(
+                      ${forkedFrom.sourceTurnItemOrdinal ?? null},
                       (SELECT ordinal FROM fork_boundary),
                       (
                         SELECT ordinal
@@ -3782,6 +3862,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   rowLimit: window.rowLimit,
                   userTurnLimit: window.userTurnLimit,
                   requiredRunId: forkedFrom.runId,
+                  sourceTurnItemOrdinal: forkedFrom.sourceTurnItemOrdinal,
                   suppressLocal: anchor === undefined || anchorIsInDescendant,
                   ...(anchor === undefined || anchorIsInDescendant
                     ? {}
@@ -5310,6 +5391,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError(controlReadError(threadId)),
       );
 
+    const hasHtmlRenderPublication: ProjectionStoreV2Shape["hasHtmlRenderPublication"] = (
+      threadId,
+      attachmentId,
+    ) =>
+      sql<{ found: number }>`SELECT 1 AS found FROM orchestration_v2_projection_turn_items
+        WHERE thread_id = ${threadId} AND type = 'dynamic_tool'
+          AND json_extract(payload_json, '$.toolName') = 't3-code.html_render'
+          AND json_extract(payload_json, '$.output.htmlRender.attachmentId') = ${attachmentId}
+          AND json_extract(payload_json, '$.input.publication.requestHash') IS NOT NULL
+        LIMIT 1`.pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError(controlReadError(threadId)),
+      );
+
     const getThreadAttachmentIds: ProjectionStoreV2Shape["getThreadAttachmentIds"] = (threadId) =>
       Effect.all([
         sql<{ id: string }>`
@@ -5334,11 +5429,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       WHERE thread.thread_id = ${threadId}
         AND json_extract(message.value, '$.status') = 'pending'
     `,
+        getThread(threadId).pipe(
+          Effect.flatMap((thread) =>
+            thread.forkedFrom?.type === "run"
+              ? getThreadProjection(threadId).pipe(
+                  Effect.map((projection) =>
+                    projection.visibleTurnItems.flatMap((row) =>
+                      row.item.type === "dynamic_tool"
+                        ? threadHtmlRenderAttachmentIds(row.sourceThreadId, [row.item])
+                        : [],
+                    ),
+                  ),
+                )
+              : Effect.succeed([]),
+          ),
+        ),
       ]).pipe(
-        Effect.map(([messages, renders, guestFiles]) => [
+        Effect.map(([messages, renders, guestFiles, inheritedRenders]) => [
           ...new Set([
             ...messages.map((row) => row.id),
             ...guestFiles.map((row) => row.id),
+            ...inheritedRenders,
             ...threadHtmlRenderAttachmentIds(
               threadId,
               renders.map((row) => {
@@ -5352,6 +5463,40 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ]),
         ]),
         Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
+      );
+
+    const isHtmlRenderAttachmentReferenced: ProjectionStoreV2Shape["isHtmlRenderAttachmentReferenced"] =
+      Effect.fn("ProjectionStore.isHtmlRenderAttachmentReferenced")(
+        function* (attachmentId) {
+          const candidates = yield* sql<{ thread_id: string }>`
+          WITH RECURSIVE candidates(thread_id) AS (
+            SELECT thread_id FROM orchestration_v2_projection_turn_items
+            WHERE type = 'dynamic_tool' AND instr(payload_json, ${attachmentId}) > 0
+            UNION
+            SELECT child.thread_id FROM orchestration_v2_projection_threads child
+            JOIN candidates parent ON json_extract(child.payload_json, '$.forkedFrom.threadId') = parent.thread_id
+            WHERE json_extract(child.payload_json, '$.forkedFrom.type') = 'run'
+          )
+          SELECT DISTINCT c.thread_id FROM candidates c
+          JOIN orchestration_v2_projection_threads t ON t.thread_id = c.thread_id
+          WHERE t.deleted_at IS NULL
+        `;
+          for (const row of candidates) {
+            const projection = yield* getThreadProjection(ThreadId.make(row.thread_id));
+            if (
+              projection.visibleTurnItems.some(
+                (item) =>
+                  item.item.type === "dynamic_tool" &&
+                  threadHtmlRenderAttachmentIds(item.sourceThreadId, [item.item]).includes(
+                    attachmentId,
+                  ),
+              )
+            )
+              return true;
+          }
+          return false;
+        },
+        Effect.mapError(controlReadError(ThreadId.make("thread:html-attachment"))),
       );
 
     const getThreadRecords: ProjectionStoreV2Shape["getThreadRecords"] = (
@@ -5399,7 +5544,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     type TimelineIndexItem = Pick<
       OrchestrationV2TurnItem,
-      "id" | "threadId" | "runId" | "nodeId" | "type"
+      "id" | "threadId" | "runId" | "nodeId" | "type" | "ordinal"
     > & {
       readonly inputIntent?: Extract<
         OrchestrationV2TurnItem,
@@ -5407,6 +5552,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       >["inputIntent"];
       readonly createdBy?: "user" | "agent" | "system";
       readonly messageId?: MessageId;
+      readonly toolName?: string;
+      readonly input?: unknown;
     };
     type TimelineIndexRow = {
       readonly sourceThreadId: ThreadId;
@@ -5436,10 +5583,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           input_intent: NonNullable<TimelineIndexItem["inputIntent"]> | null;
           created_by: "user" | "agent" | "system" | null;
           message_id: string | null;
+          tool_name: string | null;
+          publication_input: string | null;
+          ordinal: number;
         }>`SELECT turn_item_id, run_id, node_id, type,
           CASE WHEN type = 'user_message' THEN json_extract(payload_json, '$.inputIntent') END AS input_intent,
           CASE WHEN type = 'user_message' THEN json_extract(payload_json, '$.createdBy') END AS created_by,
-          CASE WHEN type IN ('user_message', 'assistant_message') THEN json_extract(payload_json, '$.messageId') END AS message_id
+          CASE WHEN type IN ('user_message', 'assistant_message') THEN json_extract(payload_json, '$.messageId') END AS message_id,
+          CASE WHEN type = 'dynamic_tool' AND run_id IS NULL THEN json_extract(payload_json, '$.toolName') END AS tool_name,
+          CASE WHEN type = 'dynamic_tool' AND run_id IS NULL THEN json_extract(payload_json, '$.input') END AS publication_input,
+          ordinal
         FROM orchestration_v2_projection_turn_items WHERE thread_id = ${threadId}
         ORDER BY ordinal ASC, turn_item_id ASC`;
         const items: Array<TimelineIndexItem> = rows.map((row) => ({
@@ -5451,6 +5604,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ...(row.input_intent === null ? {} : { inputIntent: row.input_intent }),
           ...(row.created_by === null ? {} : { createdBy: row.created_by }),
           ...(row.message_id === null ? {} : { messageId: MessageId.make(row.message_id) }),
+          ...(row.tool_name === null ? {} : { toolName: row.tool_name }),
+          ...(row.publication_input === null
+            ? {}
+            : { input: parseEncodedPayload(row.publication_input) }),
+          ordinal: row.ordinal,
         }));
         const local: Array<TimelineIndexRow> = items.map((item) => ({
           sourceThreadId: threadId,
@@ -5485,9 +5643,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 }) &&
                 isTurnItemAtOrBeforeRun({
                   historyOrigin: source.records.thread.historyOrigin,
-                  itemRunId: row.item.runId,
+                  item: row.item,
                   runOrdinalById: ordinals,
                   sourceRunOrdinal: sourceRun.ordinal,
+                  ...(fork.sourceTurnItemOrdinal === undefined
+                    ? {}
+                    : { sourceTurnItemOrdinal: fork.sourceTurnItemOrdinal }),
                 }),
             ),
           ].map((row) => ({ ...row, visibility: "inherited" }));
@@ -6006,10 +6167,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const selectShellRunItemCounts = (threadIds: ReadonlyArray<ThreadId>) =>
       sql<ShellRunItemCountRow>`
-        SELECT thread_id, run_id, COUNT(*) AS item_count
+        SELECT thread_id, run_id, COUNT(*) AS item_count, NULL AS publication_ordinal
         FROM orchestration_v2_projection_turn_items
         WHERE run_id IS NOT NULL AND thread_id IN ${sql.in(threadIds)}
         GROUP BY thread_id, run_id
+        UNION ALL
+        SELECT thread_id, json_extract(payload_json, '$.input.publication.anchorRunId') AS run_id,
+          1 AS item_count, ordinal AS publication_ordinal
+        FROM orchestration_v2_projection_turn_items
+        WHERE run_id IS NULL AND type = 'dynamic_tool' AND thread_id IN ${sql.in(threadIds)}
+          AND json_extract(payload_json, '$.toolName') = 't3-code.html_render'
+          AND json_extract(payload_json, '$.input.publication.requestHash') IS NOT NULL
       `;
 
     // Count all selected threads in one index walk; fork sources still need per-run counts.
@@ -6085,14 +6253,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         runOrdinalsByThreadId.set(threadId, existing);
       }
       const itemCountsByThreadId = new Map<ThreadId, Map<RunId, number>>();
+      const htmlPublicationsByThreadId = new Map<ThreadId, Array<HtmlPublicationAnchor>>();
       for (const row of input.itemCountRows) {
         const threadId = ThreadId.make(row.thread_id);
+        if (row.publication_ordinal !== null) {
+          const publications = htmlPublicationsByThreadId.get(threadId) ?? [];
+          publications.push({
+            ordinal: row.publication_ordinal,
+            anchorRunId: row.run_id === null ? null : RunId.make(row.run_id),
+          });
+          htmlPublicationsByThreadId.set(threadId, publications);
+          continue;
+        }
+        if (row.run_id === null) continue;
         const runId = RunId.make(row.run_id);
         const existing = itemCountsByThreadId.get(threadId) ?? new Map<RunId, number>();
         existing.set(runId, row.item_count);
         itemCountsByThreadId.set(threadId, existing);
       }
-      return { runOrdinalsByThreadId, itemCountsByThreadId };
+      return { runOrdinalsByThreadId, itemCountsByThreadId, htmlPublicationsByThreadId };
     };
 
     const shellItemCountMap = (rows: ReadonlyArray<ShellItemCountRow>) =>
@@ -6312,6 +6491,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly row: ShellThreadRow;
         readonly runOrdinalsByThreadId: ReadonlyMap<ThreadId, Map<RunId, number>>;
         readonly itemCountsByThreadId: ReadonlyMap<ThreadId, Map<RunId, number>>;
+        readonly htmlPublicationsByThreadId: ReadonlyMap<
+          ThreadId,
+          ReadonlyArray<HtmlPublicationAnchor>
+        >;
         readonly shellItemCountsByThreadId: ReadonlyMap<
           ThreadId,
           { readonly itemCount: number; readonly runlessItemCount: number }
@@ -6329,6 +6512,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           row,
           runOrdinalsByThreadId,
           itemCountsByThreadId,
+          htmlPublicationsByThreadId,
           shellItemCountsByThreadId,
           providerThreadsByThreadId,
           pendingTurnItemsByThreadId,
@@ -6465,6 +6649,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ),
           itemCount: shellItemCountsByThreadId.get(thread.id)?.itemCount ?? 0,
           runlessItemCount: shellItemCountsByThreadId.get(thread.id)?.runlessItemCount ?? 0,
+          htmlPublications: htmlPublicationsByThreadId.get(thread.id) ?? [],
           updatedAt: thread.updatedAt,
           runOrdinalById: runOrdinalsByThreadId.get(ThreadId.make(row.thread_id)) ?? new Map(),
           itemCountByRunId: itemCountsByThreadId.get(ThreadId.make(row.thread_id)) ?? new Map(),
@@ -6555,10 +6740,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       providerThreadRows,
       pendingTurnItemRows,
     }: Effect.Success<ReturnType<typeof readShellSnapshotRows>>) {
-      const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
-        runRows,
-        itemCountRows,
-      });
+      const { runOrdinalsByThreadId, itemCountsByThreadId, htmlPublicationsByThreadId } =
+        runMapsByThreadId({
+          runRows,
+          itemCountRows,
+        });
       const shellItemCountsByThreadId = shellItemCountMap(shellItemCountRows);
       const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
         yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
@@ -6567,6 +6753,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           row,
           runOrdinalsByThreadId,
           itemCountsByThreadId,
+          htmlPublicationsByThreadId,
           shellItemCountsByThreadId,
           providerThreadsByThreadId,
           pendingTurnItemsByThreadId,
@@ -6731,10 +6918,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ),
               ),
             ]);
-            const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
-              runRows,
-              itemCountRows,
-            });
+            const { runOrdinalsByThreadId, itemCountsByThreadId, htmlPublicationsByThreadId } =
+              runMapsByThreadId({
+                runRows,
+                itemCountRows,
+              });
             const shellItemCountsByThreadId = shellItemCountMap(shellItemCountRows);
             const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
               yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
@@ -6744,6 +6932,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 row,
                 runOrdinalsByThreadId,
                 itemCountsByThreadId,
+                htmlPublicationsByThreadId,
                 shellItemCountsByThreadId,
                 providerThreadsByThreadId,
                 pendingTurnItemsByThreadId,
@@ -6799,6 +6988,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getMessageCount: readOnReader(getMessageCount),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
       getTurnItem: readOnReader(getTurnItem),
+      hasHtmlRenderPublication: readOnReader(hasHtmlRenderPublication),
+      isHtmlRenderAttachmentReferenced: readOnReader(isHtmlRenderAttachmentReferenced),
       getThreadRecords: (threadId, fields, filter) =>
         getThreadRecords(threadId, fields, filter).pipe(NodeSqliteClient.readOnly),
       getRuntimeRequest: readOnReader(getRuntimeRequest),
@@ -7190,6 +7381,43 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               state.projections.get(threadId)?.turnItems.find((item) => item.id === itemId) ?? null,
           ),
         ),
+      hasHtmlRenderPublication: (threadId, attachmentId) =>
+        Ref.get(replayState).pipe(
+          Effect.map(
+            (state) =>
+              state.projections
+                .get(threadId)
+                ?.turnItems.some(
+                  (item) =>
+                    item.type === "dynamic_tool" &&
+                    item.toolName === "t3-code.html_render" &&
+                    (item.output as { htmlRender?: { attachmentId?: string } } | undefined)
+                      ?.htmlRender?.attachmentId === attachmentId &&
+                    typeof (item.input as { publication?: { requestHash?: string } } | undefined)
+                      ?.publication?.requestHash === "string",
+                ) ?? false,
+          ),
+        ),
+      isHtmlRenderAttachmentReferenced: Effect.fn(
+        "ProjectionStore.isHtmlRenderAttachmentReferenced",
+      )(function* (attachmentId) {
+        const state = yield* Ref.get(replayState);
+        for (const [threadId, projection] of state.projections) {
+          if (projection.thread.deletedAt !== null) continue;
+          const visible = yield* service.getThreadProjection(threadId);
+          if (
+            visible.visibleTurnItems.some(
+              (row) =>
+                row.item.type === "dynamic_tool" &&
+                threadHtmlRenderAttachmentIds(row.sourceThreadId, [row.item]).includes(
+                  attachmentId,
+                ),
+            )
+          )
+            return true;
+        }
+        return false;
+      }),
       getThreadAttachmentIds: (threadId) =>
         service.getThreadProjection(threadId).pipe(
           Effect.map((projection) => [
@@ -7200,6 +7428,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               ...(projection.thread.guestShare?.messages ?? []).flatMap((message) =>
                 message.status === "pending"
                   ? (message.attachments ?? []).map((attachment) => attachment.id)
+                  : [],
+              ),
+              ...projection.visibleTurnItems.flatMap((row) =>
+                row.item.type === "dynamic_tool"
+                  ? threadHtmlRenderAttachmentIds(row.sourceThreadId, [row.item])
                   : [],
               ),
               ...threadHtmlRenderAttachmentIds(

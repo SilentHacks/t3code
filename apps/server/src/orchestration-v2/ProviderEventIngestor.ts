@@ -32,6 +32,7 @@ import * as SqlError from "effect/sql/SqlError";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
+import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as EventSink from "./EventSink.ts";
@@ -649,18 +650,37 @@ export const layer: Layer.Layer<
                   nodeId: input.event.message.nodeId,
                 }),
               ];
-            case "turn_item.updated":
+            case "turn_item.updated": {
+              const item = input.event.turnItem;
+              const render =
+                item.type === "dynamic_tool" && item.status === "completed"
+                  ? htmlRenderFromToolItem(item)
+                  : undefined;
+              const echoed =
+                render !== undefined &&
+                (yield* projections.hasHtmlRenderPublication(item.threadId, render.attachmentId));
               return [
                 yield* makeDomainEvent(input, {
                   type: "turn-item.updated",
-                  threadId: input.event.turnItem.threadId,
+                  threadId: item.threadId,
                   payload: boundFileChangeForStorage(
-                    stripUnservedToolOutputImageBytes(input.event.turnItem),
+                    stripUnservedToolOutputImageBytes(
+                      echoed && item.type === "dynamic_tool"
+                        ? {
+                            ...item,
+                            output: {
+                              publishedAttachmentId: render.attachmentId,
+                              providerOutput: item.output,
+                            },
+                          }
+                        : item,
+                    ),
                   ),
-                  runId: input.event.turnItem.runId,
-                  nodeId: input.event.turnItem.nodeId,
+                  runId: item.runId,
+                  nodeId: item.nodeId,
                 }),
               ];
+            }
             case "runtime_request.updated":
               return [
                 yield* makeDomainEvent(input, {

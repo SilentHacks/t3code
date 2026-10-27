@@ -514,6 +514,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.background-work.settle":
     case "thread.stop":
     case "provider.switch":
+    case "html-render.publish":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -4083,6 +4084,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         sourceRun,
         sourceProviderThread,
         sourceTokenUsage: providerTurnForRun(sourceProjection, sourceRun)?.tokenUsage,
+        sourceTurnItemOrdinal:
+          (yield* projectionStore
+            .getNextTurnItemOrdinal(command.sourceThreadId)
+            .pipe(mapDispatchError(command))) - 1,
         canonicalSourcePoint: contextSourcePointForRun(sourceProjection, sourceRun),
         transferId,
         targetThreadId: command.targetThreadId,
@@ -11811,6 +11816,65 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       | undefined;
     let updateDelegatedCompletionOnlyRunId: RunId | undefined;
     switch (command.type) {
+      case "html-render.publish": {
+        const projection = yield* projectionStore
+          .getThreadRecords(command.threadId, ["runs", "providerThreads"])
+          .pipe(
+            Effect.mapError(
+              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+            ),
+          );
+        if (
+          projection.thread.deletedAt !== null ||
+          projection.thread.providerInstanceId !== command.providerInstanceId ||
+          !projection.providerThreads.some(
+            (providerThread) =>
+              providerThread.id === projection.thread.activeProviderThreadId &&
+              providerThread.providerSessionId === command.providerSessionId &&
+              providerThread.providerInstanceId === command.providerInstanceId,
+          )
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The calling provider no longer owns this thread.",
+          });
+        }
+        const lastRun = projection.runs.at(-1);
+        const now = yield* DateTime.now;
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          providerInstanceId: command.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            id: command.itemId,
+            threadId: command.threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: yield* nextTurnItemOrdinal(projection),
+            status: "completed",
+            title: command.reference.title,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "dynamic_tool",
+            toolName: "t3-code.html_render",
+            input: {
+              publication: { requestHash: command.requestHash, anchorRunId: lastRun?.id ?? null },
+            },
+            output: { htmlRender: command.reference },
+          },
+        });
+        break;
+      }
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
         break;
