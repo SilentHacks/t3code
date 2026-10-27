@@ -10,18 +10,12 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
-import {
-  AVAILABLE_CONNECTION_STATE,
-  presentEnvironmentConnection,
-  type EnvironmentPresentation,
-} from "@t3tools/client-runtime/connection";
 import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
 import { createOutdatedServerUpdateCommand } from "@t3tools/client-runtime/state/outdatedServerUpdate";
 import { createEnvironmentServerConfigsAtom } from "@t3tools/client-runtime/state/shell";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
-import { isConnectedWithConfig } from "../components/settings/scopedSettings";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentAtomList } from "./environmentAtomList";

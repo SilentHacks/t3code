@@ -186,6 +186,7 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
   const promptSent = yield* Deferred.make<void>();
   const availableCommands: Array<ReadonlyArray<string>> = [];
   const continuationRequests: Array<unknown> = [];
+  const continuationOffered = yield* Deferred.make<void>();
   const childProcessSpawner = ChildProcessSpawner.make((command) => {
     if (command._tag !== "StandardCommand") return underlying.spawn(command);
     launches.push(command);
@@ -203,7 +204,7 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
       offer: (request) =>
         Effect.sync(() => {
           continuationRequests.push(request);
-        }),
+        }).pipe(Effect.andThen(Deferred.succeed(continuationOffered, undefined)), Effect.asVoid),
     },
     onAvailableCommandsUpdate: (commands) =>
       Effect.sync(() => {
@@ -231,6 +232,7 @@ const makeHarness = Effect.fnUntraced(function* (environment: NodeJS.ProcessEnv 
     promptSent,
     availableCommands,
     continuationRequests,
+    continuationOffered,
   };
 });
 
@@ -488,26 +490,26 @@ describe("OMP lifecycle bridge", () => {
         readonly subagent: { readonly nativeTaskRef?: { readonly nativeId: string } };
       };
       expect(completed.subagent.nativeTaskRef?.nativeId).toBe("bg-1");
-      yield* Effect.gen(function* () {
-        while (harness.continuationRequests.length === 0) yield* Effect.sleep("20 millis");
-      }).pipe(Effect.timeout("5 seconds"));
+      yield* Deferred.await(harness.continuationOffered);
       expect(encodeJson(events)).not.toContain("SUBAGENT_SESSION");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.live("keeps the stale-frame behavior when the extension never connects", () =>
     Effect.gen(function* () {
-      const harness = yield* openHarness({
-        environment: { OMP_TEST_PROMPT: "async-task", OMP_TEST_BRIDGE: "off" },
-      });
-      yield* harness.runtime.startTurn(yield* turnInput(harness));
-      const events = yield* harness.runtime.events.pipe(
-        Stream.takeUntil((event) => event.type === "turn.terminal"),
-        Stream.runCollect,
-      );
-      expect(events.map(subagentStatus).filter(Boolean)).not.toContain("completed");
-      yield* Effect.sleep("400 millis");
-      expect(harness.continuationRequests).toEqual([]);
+      const continuationRequests = yield* Effect.gen(function* () {
+        const harness = yield* openHarness({
+          environment: { OMP_TEST_PROMPT: "async-task", OMP_TEST_BRIDGE: "off" },
+        });
+        yield* harness.runtime.startTurn(yield* turnInput(harness));
+        const events = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        expect(events.map(subagentStatus).filter(Boolean)).not.toContain("completed");
+        return harness.continuationRequests;
+      }).pipe(Effect.scoped);
+      expect(continuationRequests).toEqual([]);
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 });

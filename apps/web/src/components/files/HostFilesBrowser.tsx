@@ -243,6 +243,7 @@ export function HostFilesBrowser(props: HostFilesBrowserProps) {
     },
   );
   const revealId = props.initialPathRevealId;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Fetch remote listings on mount, permission changes, and external reveal requests.
   useEffect(() => {
     if (!canManage) return;
     // oxlint-disable-next-line react/set-state-in-effect -- loading a listing is an async server fetch that must start after mount.

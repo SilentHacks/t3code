@@ -5,6 +5,7 @@ import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { CommandPalette } from "./CommandPalette";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { openCommandPalette } from "../commandPaletteBus";
+import { dispatchCommandPalette } from "../commandPaletteStore";
 import { primaryServerKeybindingsAtom } from "../state/server";
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -36,7 +37,12 @@ vi.mock("../hooks/useScratchProject", () => ({
 }));
 vi.mock("../hooks/useNewProject", () => ({ useNewProject: () => vi.fn() }));
 vi.mock("../hooks/useHandleNewThread", () => ({
-  useHandleNewThread: () => ({}),
+  useHandleNewThread: () => ({
+    activeDraftThread: null,
+    activeThread: null,
+    defaultProjectRef: null,
+    handleNewThread: vi.fn(),
+  }),
   useNewThreadHandler: () => () => Promise.resolve(null),
 }));
 vi.mock("../hooks/useOpenPanelPullRequestUrl", () => ({ useOpenPanelPullRequestUrl: () => null }));
@@ -56,7 +62,7 @@ vi.mock("../state/entities", async (importOriginal) => ({
 }));
 vi.mock("../state/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/queries")>()),
-  useThreadSearch: () => ({ matches: [] }),
+  useThreadSearch: () => ({ matches: [], query: "", isPending: false }),
 }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),
@@ -132,15 +138,14 @@ describe("command palette focus restoration", () => {
     await using screen = await renderPalette(<input aria-label="Settings field" />);
     const field = screen.container.querySelector("input")!;
     await act(() => field.focus());
+    await act(() => openCommandPalette());
+    await flushFocus();
     await act(() =>
-      field.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "p",
-          ctrlKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      ),
+      dispatchCommandPalette({
+        _tag: "OpenChildSearch",
+        mode: "files",
+        context: { query: "", linkedThreadSearch: null },
+      }),
     );
     await flushFocus();
     expect(document.querySelector('[data-palette-mode="files"]')).not.toBeNull();

@@ -86,7 +86,9 @@ function ServerFiles(props: {
     [environmentId, list],
   );
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Load remote listings after mount and permission changes.
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- The remote fetch owns its loading state.
     if (allowed) void navigate(props.initialPath);
   }, [allowed, navigate, props.initialPath]);
 

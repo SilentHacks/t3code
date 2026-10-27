@@ -1,11 +1,5 @@
-/**
- * T3 side of the OMP lifecycle bridge (see OmpLifecycleBridgeExtension.ts).
- *
- * One bridge per `omp acp` runtime: a private Unix socket in a 0700 temp
- * directory, the extension source next to it, and a one-time token. Frames
- * the extension relays are handed to the runtime's session-update handlers,
- * so the shared ACP adapter projects them as if OMP had sent them.
- */
+// One token-authenticated Unix socket per OMP runtime, in a private 0700 directory.
+// Relayed frames use the same session-update handlers as native ACP events.
 // @effect-diagnostics nodeBuiltinImport:off -- Unix-socket IPC with an out-of-process extension.
 // @effect-diagnostics globalTimers:off -- ack timeouts live inside a raw socket Promise.
 // @effect-diagnostics preferSchemaOverJson:off -- outbound control lines are fixed literals.

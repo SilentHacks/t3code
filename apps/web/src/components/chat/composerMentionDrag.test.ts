@@ -6,8 +6,6 @@ import {
   composerMentionFromFileTab,
   composerMentionFromTreePath,
   writeComposerMentionDrag,
-  COMPOSER_PULL_REQUEST_DRAG_TYPE,
-  encodePullRequestDragPayload,
   type ComposerMentionDropHost,
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag.ts";

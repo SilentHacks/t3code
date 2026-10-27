@@ -212,12 +212,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 <SettingsRow
                   icon="internaldrive"
                   label="Browse server files"
-                  onPress={() =>
-                    navigation.navigate("SettingsSheet", {
-                      screen: "SettingsContent",
-                      params: { screen: "SettingsEnvironmentFiles", params: { environmentId } },
-                    })
-                  }
+                  onPress={() => navigation.navigate("SettingsEnvironmentFiles", { environmentId })}
                 />
               </SettingsSection>
             ) : null}

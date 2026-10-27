@@ -1,22 +1,7 @@
-/**
- * Source of the OMP extension T3 loads into every managed `omp acp` runtime.
- *
- * OMP forwards session events to its ACP client only while a `session/prompt`
- * is open. Async jobs (background `task` fan-outs, auto-backgrounded bash)
- * finish later, and OMP then runs a follow-up agent turn on its own; none of
- * that reaches ACP. The extension sees every in-process event, so it relays
- * what ACP misses to T3 over a private Unix socket as ACP-shaped frames.
- *
- * Classification: T3 tells the extension when its prompt opens (awaiting the
- * ack before sending `session/prompt`) and when the response arrives. OMP only
- * answers a prompt once idle, so an agent run still active at prompt end began
- * after the response and is relayed; a run that ended inside the prompt was
- * already on the wire. Async-job terminal frames are always relayed: they are
- * idempotent, and they are the frames ACP drops at the prompt boundary.
- *
- * Plain JavaScript inside TypeScript syntax: OMP loads it with Bun, outside
- * T3's bundle, so it must not import anything but Node built-ins.
- */
+// OMP drops updates outside an open ACP prompt; relay later turns and job completions.
+// Prompt acknowledgements distinguish already-forwarded events from later runs.
+// Always relay idempotent async terminal frames, including at the prompt boundary.
+// OMP loads this unbundled source with Bun; imports must be Node built-ins only.
 export const OMP_LIFECYCLE_BRIDGE_PROTOCOL_VERSION = 1;
 
 export const OMP_LIFECYCLE_BRIDGE_EXTENSION_SOURCE = String.raw`

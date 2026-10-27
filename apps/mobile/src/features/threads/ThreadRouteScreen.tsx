@@ -437,11 +437,14 @@ function ThreadRouteContent(
         if (settled._tag !== "Success") throw squashAtomCommandFailure(settled);
       },
       startNewThread: async () => {
-        navigation.navigate("Thread", {
-          draft: {
-            environmentId: thread.environmentId,
-            projectId: thread.projectId,
-            requestId: uuidv4(),
+        selectDetail({
+          name: "Thread",
+          params: {
+            draft: {
+              environmentId: thread.environmentId,
+              projectId: thread.projectId,
+              requestId: uuidv4(),
+            },
           },
         });
       },
@@ -460,7 +463,7 @@ function ThreadRouteContent(
             ? result.error.message
             : "An error occurred.",
     );
-  }, [navigation, selectedThreadCreation, serverConfigs, settleThread]);
+  }, [navigation, selectDetail, selectedThreadCreation, serverConfigs, settleThread]);
   const mergeBackTargetThreadId = resolveMergeBackTargetThreadId(selectedThreadDetail);
   const mergeBackRun =
     selectedThreadDetail === null ? null : resolveLatestMergeBackRun(selectedThreadDetail);

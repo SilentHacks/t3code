@@ -11,7 +11,8 @@ const harness = vi.hoisted(() => ({
   navigatedRoutes: [] as string[],
 }));
 
-vi.mock("@react-navigation/native", () => {
+vi.mock("@react-navigation/native", async () => {
+  const { createContext } = await import("react");
   const navigation = {
     canGoBack: () => true,
     dispatch: () => {},
@@ -26,11 +27,19 @@ vi.mock("@react-navigation/native", () => {
     },
   };
   return {
+    NavigationContext: createContext(navigation),
+    NavigationRouteContext: createContext({ key: "thread-1" }),
     StackActions: { replace: () => ({}) },
     useNavigation: () => navigation,
   };
 });
 vi.mock("../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () => () => {} }));
+vi.mock("../../native/native-layout-metrics", () => ({ useDeviceType: () => "phone" }));
+vi.mock("../../components/ui/Toolbar", () => ({ Toolbar: { Button: () => null } }));
+vi.mock("../../components/ui/Dialog", () => ({ confirm: async () => true }));
+vi.mock("../workspace/useAndroidWorkspaceNavigation", () => ({
+  useWorkspaceBackNavigation: () => () => {},
+}));
 
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
 vi.mock("../../components/ui/AppBar", async () => {
@@ -123,22 +132,6 @@ function Header(props: {
       onOpenFilesInspector={() => {}}
     />
   );
-}
-
-function renderedGitMenuItems(): Array<{
-  description?: unknown;
-  label?: unknown;
-  onPress?: () => void;
-}> {
-  const items = harness.renderedRightItems.at(-1) ?? [];
-  const git = items.find((item) => item.identifier === "thread-right-git") as
-    | { menu: { items: Array<{ description?: unknown; label?: unknown; onPress?: () => void }> } }
-    | undefined;
-  return git?.menu.items ?? [];
-}
-
-function renderedGitStatusDescription(): unknown {
-  return renderedGitMenuItems()[0]?.description;
 }
 
 let root: Root | null = null;

@@ -52,7 +52,6 @@ function Probe({
   const state = usePendingThreadRequests({
     environmentId,
     activeThreadId: projection.thread.id,
-    activeThread: projection.thread,
     serverProjection: projection,
     supportsQuestionAttachments: true,
     composerDraftTarget: { environmentId, threadId: projection.thread.id },
