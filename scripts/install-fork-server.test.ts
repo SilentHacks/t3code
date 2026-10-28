@@ -23,6 +23,13 @@ async function withFixture(test: (env: NodeJS.ProcessEnv, root: string) => Promi
       NodePath.join(import.meta.dirname, "lib/public-config.ts"),
       NodePath.join(fixture, "scripts/lib/public-config.ts"),
     );
+    await NodeFSP.copyFile(
+      NodePath.join(import.meta.dirname, "../package.json"),
+      NodePath.join(fixture, "package.json"),
+    );
+    const { engines } = JSON.parse(
+      await NodeFSP.readFile(NodePath.join(fixture, "package.json"), "utf8"),
+    );
     await NodeFSP.writeFile(
       NodePath.join(fixture, ".env.example"),
       "T3CODE_CLERK_PUBLISHABLE_KEY=pk_live_fixture\nT3CODE_CLERK_JWT_TEMPLATE=t3-relay\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=fixture-oauth\nT3CODE_RELAY_URL=https://relay.example.com\n",
@@ -47,6 +54,9 @@ case "$1" in
    if [[ "\${TEST_NO_OMP:-0}" == 0 ]]; then
      mkdir -p "$directory/apps/server/src/provider/Drivers"
      touch "$directory/apps/server/src/provider/Drivers/OmpDriver.ts"
+   fi
+   if [[ "\${TEST_NO_CONNECT_CONFIG:-0}" == 1 ]]; then
+     : > "$directory/.env.example"
    fi ;;
  rev-parse) echo 0123456789012345678901234567890123456789 ;;
 esac`,
@@ -57,6 +67,7 @@ if [[ "$1" == run ]]; then
   chmod +x native/resource-monitor/target/release/t3-resource-monitor
 fi`,
       vp: `
+[[ "\${VP_NODE_VERSION:-}" == "$TEST_NODE_VERSION" ]] || { echo 'Incorrect Node build version' >&2; exit 98; }
 case "$1" in
  i) exit 0 ;;
  exec) shift 2; exec ${quote(process.execPath)} "$@" ;;
@@ -87,6 +98,7 @@ esac`,
         HOME: home,
         PATH: `${tools}:${process.env.PATH}`,
         TEST_FIXTURE: fixture,
+        TEST_NODE_VERSION: engines.node,
         T3CODE_HOME: NodePath.join(home, ".t3"),
         T3CODE_FORK_REF: "fixture-ref",
         T3CODE_FORK_HOME: NodePath.join(home, ".t3-omp"),
@@ -102,59 +114,68 @@ esac`,
 }
 
 describe("fork server installer", () => {
-  it("installs an isolated launcher and separate service without changing stock t3", () =>
-    withFixture(async (env) => {
-      const bin = env.T3CODE_FORK_BIN_DIR!;
-      await NodeFSP.mkdir(bin, { recursive: true });
-      await NodeFSP.mkdir(env.T3CODE_HOME!, { recursive: true });
-      await NodeFSP.writeFile(NodePath.join(bin, "t3"), "stock t3");
-      await NodeFSP.writeFile(NodePath.join(env.T3CODE_HOME!, "keep"), "live state");
-      const result = run("bash", [installer, "--systemd"], env);
-      expect(result.stderr, result.stdout).toBe("");
-      expect(result.status, result.stdout).toBe(0);
-      expect(await NodeFSP.readFile(NodePath.join(bin, "t3"), "utf8")).toBe("stock t3");
-      expect(await NodeFSP.readFile(NodePath.join(env.T3CODE_HOME!, "keep"), "utf8")).toBe(
-        "live state",
-      );
-      const launcher = NodePath.join(bin, "t3-omp");
-      const invocation = run(launcher, ["serve", "--host", "value with spaces"], env);
-      expect(invocation.status).toBe(0);
-      expect(JSON.parse(invocation.stdout)).toEqual({
-        args: ["serve", "--host", "value with spaces"],
-        home: env.T3CODE_FORK_HOME,
-        port: "3774",
-      });
-      const defaultEnv = { ...env };
-      delete defaultEnv.T3CODE_FORK_HOME;
-      expect(JSON.parse(run(launcher, ["serve"], defaultEnv).stdout).home).toBe(
-        env.T3CODE_FORK_HOME,
-      );
-      const override = NodePath.join(env.HOME!, "other state");
-      expect(
-        JSON.parse(
-          run(launcher, ["connect", "link", "--headless"], { ...env, T3CODE_FORK_HOME: override })
-            .stdout,
-        ).home,
-      ).toBe(override);
-      for (const args of [
-        ["update"],
-        ["service", "install"],
-        ["connect"],
-        ["connect", "--base-dir", "example"],
-      ]) {
-        expect(run(launcher, args, env).status).toBe(1);
-      }
-      const unit = await NodeFSP.readFile(
-        NodePath.join(env.XDG_CONFIG_HOME!, "systemd/user/t3-omp.service"),
-        "utf8",
-      );
-      expect(unit).toContain("t3-omp");
-      expect(unit).toContain("$$dollars");
-      expect(unit).toContain("KillMode=mixed");
-      expect(unit).toContain("WorkingDirectory=%h");
-      expect(result.stdout).toContain("connect link --headless");
-      expect(run("bash", [installer, "--systemd"], env).status).toBe(0);
-    }));
+  it.each(["canonical", "Vite aliases"])(
+    "installs an isolated launcher and separate service without changing stock t3 (%s)",
+    (configStyle) =>
+      withFixture(async (env) => {
+        if (configStyle === "Vite aliases") {
+          await NodeFSP.writeFile(
+            NodePath.join(env.TEST_FIXTURE!, ".env.example"),
+            "VITE_CLERK_PUBLISHABLE_KEY=pk_live_fixture\nVITE_CLERK_JWT_TEMPLATE=t3-relay\nVITE_CLERK_CLI_OAUTH_CLIENT_ID=fixture-oauth\nVITE_T3CODE_RELAY_URL=https://relay.example.com\n",
+          );
+        }
+        const bin = env.T3CODE_FORK_BIN_DIR!;
+        await NodeFSP.mkdir(bin, { recursive: true });
+        await NodeFSP.mkdir(env.T3CODE_HOME!, { recursive: true });
+        await NodeFSP.writeFile(NodePath.join(bin, "t3"), "stock t3");
+        await NodeFSP.writeFile(NodePath.join(env.T3CODE_HOME!, "keep"), "live state");
+        const result = run("bash", [installer, "--systemd"], env);
+        expect(result.stderr, result.stdout).toBe("");
+        expect(result.status, result.stdout).toBe(0);
+        expect(await NodeFSP.readFile(NodePath.join(bin, "t3"), "utf8")).toBe("stock t3");
+        expect(await NodeFSP.readFile(NodePath.join(env.T3CODE_HOME!, "keep"), "utf8")).toBe(
+          "live state",
+        );
+        const launcher = NodePath.join(bin, "t3-omp");
+        const invocation = run(launcher, ["serve", "--host", "value with spaces"], env);
+        expect(invocation.status).toBe(0);
+        expect(JSON.parse(invocation.stdout)).toEqual({
+          args: ["serve", "--host", "value with spaces"],
+          home: env.T3CODE_FORK_HOME,
+          port: "3774",
+        });
+        const defaultEnv = { ...env };
+        delete defaultEnv.T3CODE_FORK_HOME;
+        expect(JSON.parse(run(launcher, ["serve"], defaultEnv).stdout).home).toBe(
+          env.T3CODE_FORK_HOME,
+        );
+        const override = NodePath.join(env.HOME!, "other state");
+        expect(
+          JSON.parse(
+            run(launcher, ["connect", "link", "--headless"], { ...env, T3CODE_FORK_HOME: override })
+              .stdout,
+          ).home,
+        ).toBe(override);
+        for (const args of [
+          ["update"],
+          ["service", "install"],
+          ["connect"],
+          ["connect", "--base-dir", "example"],
+        ]) {
+          expect(run(launcher, args, env).status).toBe(1);
+        }
+        const unit = await NodeFSP.readFile(
+          NodePath.join(env.XDG_CONFIG_HOME!, "systemd/user/t3-omp.service"),
+          "utf8",
+        );
+        expect(unit).toContain("t3-omp");
+        expect(unit).toContain("$$dollars");
+        expect(unit).toContain("KillMode=mixed");
+        expect(unit).toContain("WorkingDirectory=%h");
+        expect(result.stdout).toContain("connect link --headless");
+        expect(run("bash", [installer, "--systemd"], env).status).toBe(0);
+      }),
+  );
 
   it.each([
     { TEST_OS: "Darwin" },
@@ -169,6 +190,28 @@ describe("fork server installer", () => {
       await expect(
         NodeFSP.access(NodePath.join(env.T3CODE_FORK_BIN_DIR!, "t3-omp")),
       ).rejects.toThrow();
+    }),
+  );
+
+  it.each([
+    { TEST_BUILD_FAIL: "1" },
+    { TEST_NO_CLIENT_CONFIG: "1" },
+    { TEST_NO_CONNECT_CONFIG: "1" },
+  ])("retains the installed launcher, service and release when an update fails (%o)", (failure) =>
+    withFixture(async (env) => {
+      expect(run("bash", [installer, "--systemd"], env).status).toBe(0);
+      const launcher = NodePath.join(env.T3CODE_FORK_BIN_DIR!, "t3-omp");
+      const unit = NodePath.join(env.XDG_CONFIG_HOME!, "systemd/user/t3-omp.service");
+      const releases = NodePath.join(env.T3CODE_FORK_INSTALL_DIR!, "releases");
+      const previousLauncher = await NodeFSP.readFile(launcher, "utf8");
+      const previousUnit = await NodeFSP.readFile(unit, "utf8");
+      const previousReleases = await NodeFSP.readdir(releases);
+      const result = run("bash", [installer, "--systemd"], { ...env, ...failure });
+      expect(result.status).not.toBe(0);
+      expect(await NodeFSP.readFile(launcher, "utf8")).toBe(previousLauncher);
+      expect(await NodeFSP.readFile(unit, "utf8")).toBe(previousUnit);
+      expect(await NodeFSP.readdir(releases)).toEqual(previousReleases);
+      expect(run(launcher, ["serve"], env).status).toBe(0);
     }),
   );
 

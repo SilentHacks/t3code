@@ -86,7 +86,8 @@ if ! command -v vp >/dev/null; then
   bash "$release/install-vp.sh"
   . "$HOME/.config/vite-plus/env"
 fi
-export VP_NODE_VERSION=24.21.0
+VP_NODE_VERSION="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["engines"]["node"])' "$release/package.json")"
+export VP_NODE_VERSION
 if [[ -f "$HOME/.cargo/env" ]]; then . "$HOME/.cargo/env"; fi
 if ! command -v rustup >/dev/null; then
   curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o "$release/install-rust.sh"
@@ -101,9 +102,9 @@ vp i --frozen-lockfile
 node_path="$(vp exec node -p 'process.execPath')"
 [[ -x "$node_path" ]] || die 'Could not resolve the managed Node executable.'
 "$node_path" --input-type=module <<'JS'
-import { loadRepoEnv, resolvePublicConfig } from './scripts/lib/public-config.ts';
-const config = resolvePublicConfig(loadRepoEnv());
-if (!config.clerkPublishableKey || !config.clerkJwtTemplate || !config.clerkCliOAuthClientId || !config.relayUrl) {
+import { loadRepoEnv } from './scripts/lib/public-config.ts';
+const config = loadRepoEnv();
+if (!config.T3CODE_CLERK_PUBLISHABLE_KEY || !config.T3CODE_CLERK_JWT_TEMPLATE || !config.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID || !config.T3CODE_RELAY_URL) {
   throw new Error('Missing public T3 Connect configuration. Check .env and runtime overrides.');
 }
 JS
@@ -115,8 +116,8 @@ cp native/resource-monitor/target/release/t3-resource-monitor apps/server/dist/r
 "$node_path" --input-type=module <<'JS'
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadRepoEnv, resolvePublicConfig } from './scripts/lib/public-config.ts';
-const config = resolvePublicConfig(loadRepoEnv());
+import { loadRepoEnv } from './scripts/lib/public-config.ts';
+const config = loadRepoEnv();
 const bundleText = (dir, extensions) => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
   const path = join(dir, entry.name);
   return entry.isDirectory() && entry.name !== 'client' ? bundleText(path, extensions) :
@@ -124,8 +125,8 @@ const bundleText = (dir, extensions) => readdirSync(dir, { withFileTypes: true }
 }).join('\n');
 const server = bundleText('apps/server/dist', ['.mjs', '.js']);
 const client = bundleText('apps/server/dist/client', ['.js']);
-if (![config.clerkPublishableKey, config.clerkCliOAuthClientId, config.relayUrl].every(value => server.includes(value)) ||
-    ![config.clerkPublishableKey, config.relayUrl].every(value => client.includes(value))) {
+if (![config.T3CODE_CLERK_PUBLISHABLE_KEY, config.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID, config.T3CODE_RELAY_URL].every(value => server.includes(value)) ||
+    ![config.T3CODE_CLERK_PUBLISHABLE_KEY, config.T3CODE_RELAY_URL].every(value => client.includes(value))) {
   throw new Error('Public T3 Connect configuration is missing from the built client/server.');
 }
 console.log('Verified public T3 Connect configuration in both bundles.');

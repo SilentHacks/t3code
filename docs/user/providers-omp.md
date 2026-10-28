@@ -39,9 +39,12 @@ Without `--systemd`, run `~/.local/bin/t3-omp serve` after linking. The server e
 normal managed Connect tunnel; no public listener or port-forwarding setup is necessary.
 Inspect the service with `journalctl --user -u t3-omp.service -f`.
 
-To update, rerun the fork installer and restart `t3-omp.service`. Do not use the upstream
-installer, `t3 update`, or the stock background-service installer: those can download a runtime
-without OMP. Previous fork builds are retained for rollback.
+To update, download a fresh copy of the fork installer and rerun it with your original
+`T3CODE_FORK_*` overrides, then restart `t3-omp.service` only after installation succeeds.
+Saved installer copies do not update themselves. The installer uses the checked-out revision's
+Node version and leaves the running service alone; failed builds retain the existing launcher.
+Do not use the upstream installer, `t3 update`, or the stock background-service installer:
+those can download a runtime without OMP. Previous fork builds are retained for rollback.
 
 ## Set up OMP
 
