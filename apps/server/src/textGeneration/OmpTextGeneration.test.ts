@@ -147,7 +147,6 @@ const fixture = Effect.fn("ompTextFixture")(function* (
         }),
       );
       const runtime = {
-        processContainment: "none",
         start: () =>
           Effect.succeed({
             sessionId: "native/opaque-session",

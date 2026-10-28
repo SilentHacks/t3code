@@ -65,10 +65,11 @@ const primaryServerStateAtom = Atom.make((get): PrimaryServerState => {
   }
 
   const target = { environmentId, input: {} };
-  const configProjection = Option.getOrNull(
-    AsyncResult.value(get(serverEnvironment.configProjection(target))),
+  const configProjection = AsyncResult.getOrElse(
+    get(serverEnvironment.configProjection(target)),
+    () => null,
   );
-  const welcome = Option.getOrNull(AsyncResult.value(get(serverEnvironment.welcome(target))));
+  const welcome = AsyncResult.getOrElse(get(serverEnvironment.welcome(target)), () => null);
 
   return {
     config: get(serverEnvironment.configValueAtom(environmentId)),
@@ -95,8 +96,9 @@ export const primaryServerLegacyThreadMigrationAtom = Atom.make(
     if (environmentId === null) {
       return null;
     }
-    return Option.getOrNull(
-      AsyncResult.value(get(serverEnvironment.legacyThreadMigration({ environmentId, input: {} }))),
+    return AsyncResult.getOrElse(
+      get(serverEnvironment.legacyThreadMigration({ environmentId, input: {} })),
+      () => null,
     );
   },
 ).pipe(Atom.withLabel("web-primary-server-legacy-thread-migration"));

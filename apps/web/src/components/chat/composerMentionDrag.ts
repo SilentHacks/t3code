@@ -46,14 +46,14 @@ export function dataTransferHasComposerMention(types: ReadonlyArray<string>): bo
   );
 }
 
-export interface ComposerMentionDragTransfer {
+interface ComposerMentionDragTransfer {
   readonly types: ReadonlyArray<string>;
   getData(format: string): string;
   dropEffect: string;
   readonly effectAllowed?: string;
 }
 
-export interface ComposerMentionDragEvent {
+interface ComposerMentionDragEvent {
   readonly dataTransfer: ComposerMentionDragTransfer;
   readonly nativeEvent: { stopPropagation(): void };
   preventDefault(): void;
@@ -69,7 +69,7 @@ export interface ComposerMentionDropHost {
   onInsertRejected(reason: "busy" | "scope-mismatch"): void;
 }
 
-export interface ComposerMentionDragHandlers {
+interface ComposerMentionDragHandlers {
   onDragEnter(event: ComposerMentionDragEvent): void;
   onDragOver(event: ComposerMentionDragEvent): void;
   onDrop(event: ComposerMentionDragEvent): void;
