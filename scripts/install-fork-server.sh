@@ -72,8 +72,9 @@ trap cleanup EXIT
 printf 'Fetching the fork (%s)...\n' "${T3CODE_FORK_REF:-main}"
 git init --quiet "$release"
 git -C "$release" remote add origin https://github.com/SilentHacks/t3code.git
-git -C "$release" sparse-checkout init --cone
-git -C "$release" sparse-checkout set apps packages scripts native patches assets packaging infra oxlint-plugin-t3code .vite-hooks
+git -C "$release" sparse-checkout init --no-cone
+# Vendored reference repositories are never build inputs.
+git -C "$release" sparse-checkout set --no-cone '/*' '!/.repos/'
 git -C "$release" fetch --filter=blob:none --depth=1 origin "${T3CODE_FORK_REF:-main}"
 git -C "$release" checkout --detach --quiet FETCH_HEAD
 [[ -f "$release/apps/server/src/provider/Drivers/OmpDriver.ts" ]] || die 'This revision does not include OMP.'

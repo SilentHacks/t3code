@@ -5,6 +5,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
+import { generateThirdPartyLicenseManifest } from "./lib/third-party-licenses.ts";
+
 const installer = NodePath.resolve(import.meta.dirname, "install-fork-server.sh");
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const run = (command: string, args: string[], env: NodeJS.ProcessEnv) =>
@@ -46,6 +48,15 @@ async function withFixture(test: (env: NodeJS.ProcessEnv, root: string) => Promi
       make: "exit 0",
       curl: "echo 'Unexpected network request' >&2; exit 99",
       git: `
+if [[ "\${TEST_REAL_GIT:-0}" == 1 ]]; then
+  if [[ "$1" == init ]]; then exec "$TEST_GIT" "$@"; fi
+  directory="$2"; shift 2
+  case "$1" in
+    remote) exec "$TEST_GIT" -C "$directory" remote add origin "$TEST_FIXTURE" ;;
+    fetch) exec "$TEST_GIT" -C "$directory" fetch --depth=1 origin HEAD ;;
+    *) exec "$TEST_GIT" -C "$directory" "$@" ;;
+  esac
+fi
 if [[ "$1" == init ]]; then exit 0; fi
 directory="$2"; shift 2
 case "$1" in
@@ -114,6 +125,73 @@ esac`,
 }
 
 describe("fork server installer", () => {
+  it("checks out license templates and new build inputs while omitting reference repositories", () =>
+    withFixture(async (env) => {
+      const fixture = env.TEST_FIXTURE!;
+      const files = {
+        "apps/server/src/provider/Drivers/OmpDriver.ts": "export {};\n",
+        "apps/web/package.json": JSON.stringify({ name: "fixture-web", dependencies: {} }),
+        "build-inputs/runtime.json": JSON.stringify({ value: "future build input" }),
+        ".repos/reference/README.md": "Not a build input\n",
+        "third-party-licenses.config.json": JSON.stringify({
+          customNotices: [
+            {
+              name: "fixture-notice",
+              bundles: ["web"],
+              license: "MIT",
+              generatedNotices: [{ licenseId: "MIT", copyrights: ["Copyright fixture"] }],
+            },
+          ],
+          packageOverrides: [],
+        }),
+      };
+      for (const [path, contents] of Object.entries(files)) {
+        const target = NodePath.join(fixture, path);
+        await NodeFSP.mkdir(NodePath.dirname(target), { recursive: true });
+        await NodeFSP.writeFile(target, contents);
+      }
+      await NodeFSP.cp(
+        NodePath.join(import.meta.dirname, "../third-party-licenses"),
+        NodePath.join(fixture, "third-party-licenses"),
+        { recursive: true },
+      );
+      const git = run("which", ["git"], process.env).stdout.trim();
+      for (const args of [
+        ["init", "--quiet"],
+        ["add", "."],
+        ["commit", "--quiet", "-m", "fixture"],
+      ]) {
+        const result = run(git, ["-C", fixture, ...args], process.env);
+        expect(result.status, result.stderr).toBe(0);
+      }
+      const result = run("bash", [installer], { ...env, TEST_REAL_GIT: "1", TEST_GIT: git });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      const releases = NodePath.join(env.T3CODE_FORK_INSTALL_DIR!, "releases");
+      const [build] = await NodeFSP.readdir(releases);
+      const release = NodePath.join(releases, build!);
+      const manifest = await generateThirdPartyLicenseManifest({
+        configFile: NodePath.join(release, "third-party-licenses.config.json"),
+        packageManifests: [
+          { bundle: "web", path: NodePath.join(release, "apps/web/package.json") },
+        ],
+      });
+      expect(manifest.entries).toEqual([
+        expect.objectContaining({
+          name: "fixture-notice",
+          license: "MIT",
+          noticeText: expect.stringContaining("Permission is hereby granted"),
+        }),
+      ]);
+      expect(
+        JSON.parse(
+          await NodeFSP.readFile(NodePath.join(release, "build-inputs/runtime.json"), "utf8"),
+        ),
+      ).toEqual({ value: "future build input" });
+      await expect(
+        NodeFSP.access(NodePath.join(release, ".repos/reference/README.md")),
+      ).rejects.toThrow();
+    }));
+
   it.each(["canonical", "Vite aliases"])(
     "installs an isolated launcher and separate service without changing stock t3 (%s)",
     (configStyle) =>
