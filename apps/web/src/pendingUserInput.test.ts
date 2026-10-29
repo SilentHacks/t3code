@@ -1,19 +1,21 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import {
+  buildPendingUserInputAnswers,
+  resolvePendingUserInputAnswer,
+  setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
+} from "@t3tools/client-runtime/state/pending-user-input";
 import { formatInlineContextReference } from "./lib/composerContextReferences";
 import { threadContextReference } from "./lib/composerContextRecords";
 import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 
 import {
-  buildPendingUserInputAnswers,
   carryDisplacedCustomAnswerIntoPrompt,
   derivePendingUserInputProgress,
   findFirstUnansweredPendingUserInputQuestionIndex,
   projectPendingUserInputAnswer,
-  resolvePendingUserInputAnswer,
-  setPendingUserInputCustomAnswer,
   threadContextsReferencedByAnswer,
-  togglePendingUserInputOptionSelection,
 } from "./pendingUserInput";
 
 describe("projectPendingUserInputAnswer", () => {
@@ -94,9 +96,9 @@ describe("resolvePendingUserInputAnswer", () => {
     expect(resolvePendingUserInputAnswer(question, { customAnswer: " \n" })).toBe(" \n");
     expect(
       setPendingUserInputCustomAnswer(
+        question,
         { selectedOptionValues: ["Orchestration-first"] },
         "",
-        question,
       ),
     ).toEqual({ customAnswer: "" });
     const drafts = { scope: { customAnswer: "" } };
@@ -152,41 +154,6 @@ describe("togglePendingUserInputOptionSelection", () => {
     );
     expect(buildPendingUserInputAnswers([question], { result: secondSelected })).toEqual({
       result: ["second"],
-    });
-  });
-});
-
-describe("buildPendingUserInputAnswers", () => {
-  it("returns a canonical answer map for complete prompts", () => {
-    expect(
-      buildPendingUserInputAnswers(
-        [
-          singleSelectQuestion,
-          {
-            id: "compat",
-            header: "Compat",
-            question: "How strict should compatibility be?",
-            options: [
-              {
-                label: "Keep current envelope",
-                description: "Preserve current wire format",
-              },
-            ],
-            multiSelect: false,
-          },
-        ],
-        {
-          scope: {
-            selectedOptionValues: ["Orchestration-first"],
-          },
-          compat: {
-            customAnswer: "Keep the current envelope for one release window",
-          },
-        },
-      ),
-    ).toEqual({
-      scope: "Orchestration-first",
-      compat: "Keep the current envelope for one release window",
     });
   });
 });
@@ -287,6 +254,17 @@ describe("pending user input question progress", () => {
     },
   ] as const;
 
+  it("counts a deliberately cleared answer as answered", () => {
+    const question = { ...singleSelectQuestion, initialAnswer: "  Proposed message\n" };
+    const drafts = { scope: { customAnswer: "" } };
+    expect(derivePendingUserInputProgress([question], drafts, 0)).toMatchObject({
+      customAnswer: "",
+      resolvedAnswer: "",
+      canAdvance: true,
+      isComplete: true,
+    });
+  });
+
   it("derives the active question and advancement state", () => {
     expect(
       derivePendingUserInputProgress(
@@ -310,25 +288,6 @@ describe("pending user input question progress", () => {
       canAdvance: true,
     });
   });
-});
-
-it("accepts attachment-only answers after every upload finishes", () => {
-  const questions = [
-    { id: "spec", header: "Spec", question: "Provide a spec", options: [], multiSelect: false },
-  ];
-  expect(buildPendingUserInputAnswers(questions, { spec: { attachmentCount: 1 } })).toEqual({
-    spec: "",
-  });
-  expect(
-    buildPendingUserInputAnswers(questions, {
-      spec: { attachmentCount: 1, attachmentsBlocked: true },
-    }),
-  ).toBeNull();
-  expect(
-    buildPendingUserInputAnswers([{ ...questions[0]!, allowCustomAnswer: false }], {
-      spec: { attachmentCount: 1 },
-    }),
-  ).toBeNull();
 });
 
 describe("carryDisplacedCustomAnswerIntoPrompt", () => {

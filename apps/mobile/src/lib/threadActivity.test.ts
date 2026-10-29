@@ -21,6 +21,12 @@ import { deriveThreadCheckpointSummaries } from "@t3tools/client-runtime/state/t
 import { getReviewSectionIdForCheckpoint } from "../features/review/reviewModel";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
+import {
+  buildPendingUserInputAnswers,
+  isPendingUserInputOptionSelected,
+  setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
+} from "@t3tools/client-runtime/state/pending-user-input";
 
 import {
   buildThreadFeed,
@@ -31,10 +37,6 @@ import {
   type ThreadFeedCache,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
-  togglePendingUserInputOptionSelection,
-  setPendingUserInputCustomAnswer,
-  isPendingUserInputOptionSelected,
-  buildPendingUserInputAnswers,
 } from "./threadActivity";
 
 const threadId = ThreadId.make("thread-1");
@@ -1368,17 +1370,6 @@ describe("retained v2 feed presentation", () => {
   });
 });
 
-const singleSelectQuestion = {
-  id: "runtime",
-  header: "Runtime",
-  question: "Which runtime should be used?",
-  options: [
-    { label: "Go", description: "One binary" },
-    { label: "Node.js", description: "Reuse TypeScript" },
-  ],
-  multiSelect: false,
-} as const;
-
 describe("subagent continued by a later turn", () => {
   const run2 = RunId.make("run-2");
   const at = (second: number) => `2026-10-09T10:00:${String(second).padStart(2, "0")}.000Z`;
@@ -1453,6 +1444,17 @@ describe("subagent continued by a later turn", () => {
     ]);
   });
 });
+
+const singleSelectQuestion = {
+  id: "runtime",
+  header: "Runtime",
+  question: "Which runtime should be used?",
+  options: [
+    { label: "Go", description: "One binary" },
+    { label: "Node.js", description: "Reuse TypeScript" },
+  ],
+  multiSelect: false,
+} as const;
 
 describe("pending user input answers", () => {
   it("preserves exact editor text, including a deliberately cleared answer", () => {
