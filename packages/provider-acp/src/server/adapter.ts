@@ -1056,6 +1056,7 @@ interface ActiveAcpTurn {
   readonly tools: Map<string, AcpToolCallState & { readonly backgroundCommandTaskId?: string }>;
   readonly toolUpdatesSkipped: Map<string, number>;
   readonly toolStartedAt: Map<string, DateTime.Utc>;
+  readonly subagentOwnedToolCallIds: Set<string>;
   readonly subagents: Map<string, ActiveAcpSubagent>;
   readonly subagentsBySessionId: Map<string, ActiveAcpSubagent>;
   readonly pendingSubagentNotifications: Map<string, Array<EffectAcpSchema.SessionNotification>>;
@@ -3571,11 +3572,21 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           if (subagentUpdates.length > 0) {
             for (const update of subagentUpdates) yield* emitSubagent(context, update);
             if (followsAgentWorkState) yield* syncNativeChildren(context);
-            if (subagentUpdates.every((update) => update.suppressNormalTool !== false)) {
-              yield* rearmDeferredFinalize(context);
-              return;
-            }
           }
+          const suppressNormalTool =
+            subagentUpdates.length > 0 &&
+            subagentUpdates.every((update) => update.suppressNormalTool !== false);
+          const alreadyOwnedBySubagents = context.subagentOwnedToolCallIds.has(toolCall.toolCallId);
+          if (suppressNormalTool) context.subagentOwnedToolCallIds.add(toolCall.toolCallId);
+          if (
+            alreadyOwnedBySubagents ||
+            (suppressNormalTool && !context.toolStartedAt.has(toolCall.toolCallId))
+          ) {
+            yield* rearmDeferredFinalize(context);
+            return;
+          }
+          // Close the provisional tool row once; child lifecycles now own the work.
+          if (suppressNormalTool) projectedStatus = "completed";
           if (
             projectedStatus === undefined &&
             !shouldPersistToolUpdate(
@@ -7458,6 +7469,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               tools: new Map(),
               toolUpdatesSkipped: new Map(),
               toolStartedAt: new Map(),
+              subagentOwnedToolCallIds: new Set(),
               subagents: new Map(),
               subagentsBySessionId: new Map(),
               pendingSubagentNotifications: new Map(),

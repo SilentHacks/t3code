@@ -13,7 +13,9 @@ import {
   ThreadId,
   type ModelSelection,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
@@ -107,6 +109,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   if (process.env.OMP_TEST_PROMPT === 'async-task') {
     const running = {id:'bg-1',agent:'explore',task:'Inspect in background',status:'running',resolvedModelIdentity:model};
     const asyncRunning = {state:'running',jobId:'job-1',type:'task'};
+    update({sessionUpdate:'tool_call',toolCallId:'async-task',title:'task',kind:'other',status:'pending',
+      rawInput:{agent:'explore',task:'Inspect in background'}});
     update({sessionUpdate:'tool_call',toolCallId:'async-task',title:'task',kind:'other',status:'in_progress',
       rawOutput:{details:{projectAgentsDir:null,results:[],progress:[running],async:asyncRunning}}});
     // OMP 18.12's stale terminal frame: wire status completed, job still running.
@@ -123,6 +127,27 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       ]);
     }, 150);
     return;
+  }
+  if (process.env.OMP_TEST_PROMPT === 'native-task-starts') {
+    const outcome = process.env.OMP_TEST_TASK_OUTCOME ?? 'completed';
+    for (const [id, title] of [['delegate', 'Delegating settled implementation units'], ['independent', 'Starting independent work']]) {
+      const agent = {id,agent:'explore',task:title,resolvedModelIdentity:model};
+      update({sessionUpdate:'tool_call',toolCallId:'call-'+id,title,kind:'other',status:'pending',
+        rawInput:{agent:'explore',task:title}});
+      update({sessionUpdate:'tool_call_update',toolCallId:'call-'+id,status:'in_progress',
+        rawOutput:{details:{projectAgentsDir:null,results:[],progress:[{...agent,status:'running'}]}}});
+      if (outcome === 'completed' || outcome === 'failed') {
+        update({sessionUpdate:'tool_call_update',toolCallId:'call-'+id,status:outcome,
+          rawOutput:{details:{projectAgentsDir:null,results:[{...agent,exitCode:outcome === 'completed' ? 0 : 1,output:'Done'}]}}});
+      } else if (outcome === 'cancelled') {
+        update({sessionUpdate:'tool_call_update',toolCallId:'call-'+id,status:'failed',
+          rawOutput:{details:{projectAgentsDir:null,results:[],progress:[{...agent,status:'aborted'}]}}});
+      }
+      update({sessionUpdate:'tool_call_update',toolCallId:'call-'+id,status:'in_progress',
+        rawOutput:{content:[{type:'text',text:'Delayed progress without task details'}]}});
+    }
+    update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'All delegated work is complete.'}});
+    return reply({stopReason:'end_turn'});
   }
   if (process.env.OMP_TEST_PROMPT === 'batch') {
     const agent = (id, status) => ({id,agent:'explore',task:'Inspect '+id,status,resolvedModelIdentity:model});
@@ -490,6 +515,15 @@ describe("OMP lifecycle bridge", () => {
         readonly subagent: { readonly nativeTaskRef?: { readonly nativeId: string } };
       };
       expect(completed.subagent.nativeTaskRef?.nativeId).toBe("bg-1");
+      const latestItems = new Map<string, OrchestrationV2TurnItem>();
+      for (const event of events) {
+        if (event.type === "turn_item.updated" && event.turnItem.threadId === threadId) {
+          latestItems.set(event.turnItem.id, event.turnItem);
+        }
+      }
+      expect(
+        [...latestItems.values()].filter((item) => item.type === "dynamic_tool"),
+      ).toMatchObject([{ status: "completed" }]);
       yield* Deferred.await(harness.continuationOffered);
       expect(encodeJson(events)).not.toContain("SUBAGENT_SESSION");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
@@ -515,6 +549,54 @@ describe("OMP lifecycle bridge", () => {
 });
 
 describe("OMP ACP wire integration", () => {
+  it.live.each(["completed", "failed", "cancelled", "running"] as const)(
+    "retires provisional task rows while preserving %s subagent state",
+    (outcome) =>
+      Effect.gen(function* () {
+        const harness = yield* openHarness({
+          environment: { OMP_TEST_PROMPT: "native-task-starts", OMP_TEST_TASK_OUTCOME: outcome },
+        });
+        const input = yield* turnInput(harness);
+        yield* harness.runtime.startTurn(input);
+        const events = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        expect(events.at(-1)).toMatchObject({ type: "turn.terminal", status: "completed" });
+        const agents = new Map(
+          events.flatMap((event) =>
+            event.type === "subagent.updated" ? [[event.subagent.id, event.subagent] as const] : [],
+          ),
+        );
+        expect([...agents.values()].map((agent) => agent.status)).toEqual([outcome, outcome]);
+        const items = new Map<string, OrchestrationV2TurnItem>();
+        for (const event of events) {
+          if (event.type === "turn_item.updated" && event.turnItem.threadId === threadId) {
+            items.set(event.turnItem.id, event.turnItem);
+          }
+        }
+        const pending = derivePendingBackgroundWork({
+          latestRun: { id: input.runId, ordinal: input.runOrdinal, status: "completed" },
+          providerThreads: [],
+          turnItems: [...items.values()],
+        });
+        expect(pending.map((task) => task.kind)).toEqual(
+          outcome === "running" ? ["subagent", "subagent"] : [],
+        );
+        const provisionalUpdates = events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+            ? [event.turnItem]
+            : [],
+        );
+        expect(provisionalUpdates.map((item) => item.status)).toEqual([
+          "pending",
+          "completed",
+          "pending",
+          "completed",
+        ]);
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("projects distinct agents and terminal results from one native batch", () =>
     Effect.gen(function* () {
       const harness = yield* openHarness({ environment: { OMP_TEST_PROMPT: "batch" } });
