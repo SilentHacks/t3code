@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
@@ -293,7 +294,7 @@ const fixture = Effect.fn("ompTextFixture")(function* (
   return { service, state, entered };
 });
 
-it.layer(NodeServices.layer)("OmpTextGeneration", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("OmpTextGeneration", (it) => {
   it.effect(
     "generates a schema-valid guide after investigating through the broker in one isolated ACP session",
     () =>

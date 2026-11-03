@@ -29,7 +29,7 @@ import {
   HostFilesUploadConflict,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -395,8 +395,8 @@ export const storeHostUpload = Effect.fn("HostFiles.storeUpload")(function* (
   claims: HostFileUploadClaims,
   body: Stream.Stream<Uint8Array, unknown>,
 ) {
-  const crypto = yield* Crypto.Crypto;
-  const partId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+  const crypto = yield* SecureRandom.SecureRandom;
+  const partId = yield* crypto.uuidV4().pipe(Effect.orDie);
   const partPath = NodePath.join(claims.directory, `.${claims.name}.${partId}.t3part`);
   let received = 0;
   const result = yield* Effect.gen(function* () {

@@ -1,7 +1,7 @@
 import { type OmpSettings, TextGenerationError } from "@t3tools/contracts";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -30,7 +30,7 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
 ) {
   const hostEnvironment = yield* HostProcess.Environment;
   const processGroupPlatform = yield* HostProcess.Platform;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const fs = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -49,7 +49,7 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
         runtimeMode: "approval-required",
         disableTools: true,
         protocolLogging: { logIncoming: false, logOutgoing: false },
-      }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      }).pipe(Effect.provideService(SecureRandom.SecureRandom, crypto));
       yield* runtime.getEvents().pipe(
         Stream.runForEach((event) =>
           event._tag === "EventStreamBarrier"

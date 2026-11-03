@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -189,6 +190,7 @@ const serverConfigLayer = ServerConfig.layerTest(process.cwd(), { prefix: "t3-om
 );
 const testLayer = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   serverConfigLayer,
   McpProviderSessions.layer,
