@@ -3,6 +3,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Unix-socket IPC with an out-of-process extension.
 // @effect-diagnostics globalTimers:off -- ack timeouts live inside a raw socket Promise.
 // @effect-diagnostics preferSchemaOverJson:off -- outbound control lines are fixed literals.
+// @effect-diagnostics globalJsonInEffect:off -- outbound control lines are fixed literals.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";

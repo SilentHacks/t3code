@@ -35,13 +35,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import {
-  base64UrlDecodeUtf8,
-  base64UrlEncode,
-  signPayload,
-  timingSafeEqualBase64Url,
-} from "../auth/utils.ts";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { base64UrlDecodeUtf8, base64UrlEncode } from "../auth/utils.ts";
+import * as PayloadSigner from "../auth/PayloadSigner.ts";
+import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 
 // Shared with asset/attachment tokens; the signed claim kind keeps them apart.
 const SIGNING_SECRET_NAME = "asset-access-signing-key";
@@ -273,25 +269,32 @@ const encodeUpload = Schema.encodeSync(uploadJson);
 const decodeDownload = Schema.decodeUnknownOption(downloadJson);
 const decodeUpload = Schema.decodeUnknownOption(uploadJson);
 
-const loadSecret = Effect.gen(function* () {
-  const store = yield* ServerSecretStore.ServerSecretStore;
-  return yield* store.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
-}).pipe(Effect.mapError(() => hostFilesError("failed", undefined, "Signing key unavailable.")));
-
-const signToken = (encodedPayload: string, secret: Uint8Array) =>
-  `${encodedPayload}.${signPayload(encodedPayload, secret)}`;
+const loadSigner = PayloadSigner.make(SIGNING_SECRET_NAME).pipe(
+  Effect.mapError(() => hostFilesError("failed", undefined, "Signing key unavailable.")),
+);
 
 const verifiedPayload = Effect.fn("HostFiles.verifiedPayload")(function* (token: string) {
   const [encodedPayload, signature, extra] = token.split(".");
   if (!encodedPayload || !signature || extra !== undefined) return null;
-  const secret = yield* loadSecret.pipe(Effect.orElseSucceed(() => null));
-  if (!secret || !timingSafeEqualBase64Url(signature, signPayload(encodedPayload, secret))) {
-    return null;
-  }
-  return yield* Effect.try(() => base64UrlDecodeUtf8(encodedPayload)).pipe(
-    Effect.orElseSucceed(() => null),
-  );
+  const signer = yield* loadSigner.pipe(Effect.orElseSucceed(() => null));
+  if (!signer) return null;
+  const verified = yield* signer
+    .verify(encodedPayload, signature)
+    .pipe(Effect.orElseSucceed(() => false));
+  if (!verified) return null;
+  return yield* Effect.try({
+    try: () => base64UrlDecodeUtf8(encodedPayload),
+    catch: () => hostFilesError("failed", undefined, "Malformed transfer token."),
+  }).pipe(Effect.orElseSucceed(() => null));
 });
+
+const signToken = (
+  signer: PayloadSigner.PayloadSigner<ServerSecretStore.SecretStoreError>,
+  payload: string,
+) =>
+  signer
+    .sign(payload)
+    .pipe(Effect.mapError(() => hostFilesError("failed", undefined, "Signing failed.")));
 
 const liveClaims = <A extends { readonly expiresAt: number }>(
   claims: Option.Option<A>,
@@ -307,14 +310,14 @@ export const createHostDownloadUrl = Effect.fn("HostFiles.createDownloadUrl")(fu
   const path = yield* requirePath(input.path);
   const target = yield* fsCall(path, () => NodeFSP.stat(path));
   if (!target.isFile() && !target.isDirectory()) return yield* hostFilesError("failed", path);
-  const secret = yield* loadSecret;
+  const signer = yield* loadSigner;
   const expiresAt = (yield* Clock.currentTimeMillis) + HOST_FILES_TRANSFER_URL_TTL_MS;
   const payload = base64UrlEncode(
     encodeDownload({ version: 1, kind: "host-file-download", path, expiresAt }),
   );
   const baseName = NodePath.basename(path) || "root";
   return {
-    relativeUrl: `${HOST_FILES_DOWNLOAD_ROUTE_PREFIX}/${signToken(payload, secret)}`,
+    relativeUrl: `${HOST_FILES_DOWNLOAD_ROUTE_PREFIX}/${payload}.${yield* signToken(signer, payload)}`,
     name: target.isDirectory() ? `${baseName}.tar.gz` : baseName,
     expiresAt,
   } satisfies HostFilesTransferUrl;
@@ -333,7 +336,7 @@ export const createHostUploadUrl = Effect.fn("HostFiles.createUploadUrl")(functi
   if (input.conflict === "fail" && (yield* pathExists(finalPath))) {
     return yield* hostFilesError("already_exists", finalPath);
   }
-  const secret = yield* loadSecret;
+  const signer = yield* loadSigner;
   const expiresAt = (yield* Clock.currentTimeMillis) + HOST_FILES_TRANSFER_URL_TTL_MS;
   const payload = base64UrlEncode(
     encodeUpload({
@@ -347,7 +350,7 @@ export const createHostUploadUrl = Effect.fn("HostFiles.createUploadUrl")(functi
     }),
   );
   return {
-    relativeUrl: `${HOST_FILES_UPLOAD_ROUTE_PREFIX}/${signToken(payload, secret)}`,
+    relativeUrl: `${HOST_FILES_UPLOAD_ROUTE_PREFIX}/${payload}.${yield* signToken(signer, payload)}`,
     name: finalPath,
     expiresAt,
   } satisfies HostFilesTransferUrl;
