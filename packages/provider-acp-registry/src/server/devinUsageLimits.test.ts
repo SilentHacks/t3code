@@ -1,7 +1,13 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Pins each platform's path rules regardless of the test host.
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as NodePath from "node:path";
 
-import { devinUsageWindows, parseDevinCredentials } from "./devinUsageLimits.ts";
+import {
+  devinCredentialsPath,
+  devinUsageWindows,
+  parseDevinCredentials,
+} from "./devinUsageLimits.ts";
 
 // Trimmed from a Devin Max GetUserStatus answer.
 const maxPlan = {
@@ -59,4 +65,26 @@ it("reads the CLI's key and server from credentials.toml", () => {
     { apiKey: "devin-abc", apiServerUrl: "https://server.codeium.com" },
   );
   assert.isUndefined(parseDevinCredentials('api_server_url = "https://server.codeium.com"\n'));
+});
+
+it("finds the CLI's credentials.toml where each platform's CLI writes it", () => {
+  const { posix, win32 } = NodePath;
+  const windows = { USERPROFILE: "C:\\Users\\me", HOME: "/c/Users/me", XDG_DATA_HOME: "C:\\xdg" };
+  assert.strictEqual(
+    devinCredentialsPath({ ...windows, AppData: "D:\\Roaming" }, "win32", win32.join),
+    "D:\\Roaming\\devin\\credentials.toml",
+  );
+  assert.strictEqual(
+    devinCredentialsPath(windows, "win32", win32.join),
+    "C:\\Users\\me\\AppData\\Roaming\\devin\\credentials.toml",
+  );
+  assert.strictEqual(
+    devinCredentialsPath({ HOME: "/home/me" }, "linux", posix.join),
+    "/home/me/.local/share/devin/credentials.toml",
+  );
+  assert.strictEqual(
+    devinCredentialsPath({ HOME: "/home/me", XDG_DATA_HOME: "/data" }, "darwin", posix.join),
+    "/data/devin/credentials.toml",
+  );
+  assert.isUndefined(devinCredentialsPath({}, "win32", win32.join));
 });

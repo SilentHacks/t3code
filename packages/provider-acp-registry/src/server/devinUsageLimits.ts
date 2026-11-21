@@ -4,6 +4,7 @@ import {
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { sha256 } from "@noble/hashes/sha2";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -45,6 +46,29 @@ export function isDevinAgent(settings: AcpRegistrySettings, basename: (path: str
   return settings.source === "local"
     ? /^devin(\.exe)?$/i.test(basename(settings.commandPath ?? ""))
     : settings.agentId === "devin";
+}
+
+/**
+ * Where the CLI keeps its login: the Roaming AppData known folder on Windows,
+ * `$XDG_DATA_HOME` or `~/.local/share` elsewhere.
+ */
+export function devinCredentialsPath(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  join: (...segments: ReadonlyArray<string>) => string,
+) {
+  if (platform === "win32") {
+    // Windows env keys are case-insensitive, but a merged copy of the environment is not.
+    const read = (name: string) =>
+      environment[name] ??
+      Object.entries(environment).find(([key]) => key.toUpperCase() === name)?.[1];
+    const userProfile = read("USERPROFILE");
+    const appData = read("APPDATA") || (userProfile && join(userProfile, "AppData", "Roaming"));
+    return appData ? join(appData, "devin", "credentials.toml") : undefined;
+  }
+  const home = environment.HOME;
+  const dataHome = environment.XDG_DATA_HOME || (home && join(home, ".local", "share"));
+  return dataHome ? join(dataHome, "devin", "credentials.toml") : undefined;
 }
 
 /** Reads the `key = "value"` pairs of the CLI's flat credentials.toml. */
@@ -105,16 +129,14 @@ export const makeDevinUsageProbe = Effect.fn("makeDevinUsageProbe")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const home = environment.HOME ?? environment.USERPROFILE;
-  const dataHome = environment.XDG_DATA_HOME || (home ? path.join(home, ".local", "share") : "");
-  const credentialsPath = path.join(dataHome, "devin", "credentials.toml");
+  const credentialsPath = devinCredentialsPath(environment, yield* HostProcess.Platform, path.join);
   const client = (yield* HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer))).pipe(
     HttpClient.filterStatusOk,
   );
 
   return Effect.gen(function* (): Effect.fn.Return<ServerProviderUsageLimits> {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const credentials = dataHome
+    const credentials = credentialsPath
       ? yield* fs.readFileString(credentialsPath).pipe(
           Effect.map(parseDevinCredentials),
           Effect.orElseSucceed(() => undefined),
